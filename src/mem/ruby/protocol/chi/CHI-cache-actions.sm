@@ -3172,11 +3172,12 @@ action(Send_CompI, desc="") {
   assert(is_valid(tbe));
 
   if (!isStashReqType(tbe.reqType)) {
-    // Used to ack Evict request
-    assert(tbe.dir_sharers.isElement(tbe.requestor));
-    assert((tbe.dir_ownerExists == false) || (tbe.dir_owner != tbe.requestor));
+    // Used to ack Evict request. upstream maybe invalidated by hazard SnpCleanInvalid.
+    if (tbe.dir_sharers.isElement(tbe.requestor)) {
+      assert((tbe.dir_ownerExists == false) || (tbe.dir_owner != tbe.requestor));
 
-    tbe.dir_sharers.remove(tbe.requestor);
+      tbe.dir_sharers.remove(tbe.requestor);
+    }
   }
 
   enqueue(rspOutPort, CHIResponseMsg, response_latency) {
