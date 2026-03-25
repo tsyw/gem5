@@ -1,0 +1,35 @@
+machine(MachineType:C2CG, "Chiplet to chiplet gateway") :
+  // Interface to the network
+  // Note vnet_type is used by Garnet only. "response" type is assumed to
+  // have data, so use it for data channels and "none" for the rest.
+  // network="To" for outbound queue; network="From" for inbound
+  // virtual networks: 0=request, 1=snoop, 2=response, 3=data
+
+  MessageBuffer * reqOut,   network="To", virtual_network="0", vnet_type="none";
+  MessageBuffer * snpOut,   network="To", virtual_network="1", vnet_type="none";
+  MessageBuffer * rspOut,   network="To", virtual_network="2", vnet_type="none";
+  MessageBuffer * datOut,   network="To", virtual_network="3", vnet_type="response";
+
+  MessageBuffer * reqIn,   network="From", virtual_network="0", vnet_type="none";
+  MessageBuffer * snpIn,   network="From", virtual_network="1", vnet_type="none";
+  MessageBuffer * rspIn,   network="From", virtual_network="2", vnet_type="none";
+  MessageBuffer * datIn,   network="From", virtual_network="3", vnet_type="response";
+
+  // Requests that can allocate a TBE
+  MessageBuffer * reqRdy;
+
+  // Snoops that can allocate a TBE
+  MessageBuffer * snpRdy;
+
+  // Internal queue for retry trigger events
+  MessageBuffer * retryTriggerQueue;
+
+  // Trigger queue for internal events
+  MessageBuffer * triggerQueue;
+
+  // Data/ack to/from memory
+  MessageBuffer * txToOutside;
+  MessageBuffer * rxFromOutside;
+
+{
+}
