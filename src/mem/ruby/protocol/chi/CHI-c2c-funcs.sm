@@ -127,6 +127,10 @@ Event reqToEvent(CHIRequestType type) {
     return Event:OutReq_WriteNoSnpPtl;
   } else if (type == CHIRequestType:Evict) {
     return Event:OutReq_Evict;
+  } else if (type == CHIRequestType:AtomicReturn) {
+    return Event:OutReq_AtomicLoad;
+  } else if (type == CHIRequestType:AtomicNoReturn) {
+    return Event:OutReq_AtomicStore;
   } else {
     error("Invalid CHIRequestType for C2CG reqToEvent");
   }
@@ -153,7 +157,7 @@ Event respToEvent(CHIResponseType type) {
   } else if (type == CHIResponseType:ReadReceipt) {
     return Event:RspIn_ReadReceipt;
   } else if (type == CHIResponseType:RespSepData) {
-    return Event:RspIn_Comp;
+    return Event:RspIn_RespSepData;
   } else if (type == CHIResponseType:RetryAck) {
     return Event:RetryAckFromHN;
   } else if (type == CHIResponseType:PCrdGrant) {
@@ -273,6 +277,15 @@ bool isWriteRequest(CHIRequestType type) {
 bool isDatalessRequest(CHIRequestType type) {
   if ((type == CHIRequestType:CleanUnique) ||
       (type == CHIRequestType:Evict)) {
+    return true;
+  }
+  return false;
+}
+
+// Determine if a request type is atomic
+bool isAtomicRequest(CHIRequestType type) {
+  if ((type == CHIRequestType:AtomicReturn) ||
+      (type == CHIRequestType:AtomicNoReturn)) {
     return true;
   }
   return false;

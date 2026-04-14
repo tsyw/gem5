@@ -183,6 +183,10 @@ in_port(c2cRxReqInPort, CHIRequestMsg, c2cRxReq, rank=2) {
           trigger(Event:InReq_Read, in_msg.addr, TBEs[in_msg.addr]);
         } else if (isWriteRequest(in_msg.type)) {
           trigger(Event:InReq_Write, in_msg.addr, TBEs[in_msg.addr]);
+        } else if (isAtomicRequest(in_msg.type)) {
+          trigger(Event:InReq_Atomic, in_msg.addr, TBEs[in_msg.addr]);
+        } else if (in_msg.type == CHIRequestType:Evict) {
+          trigger(Event:InReq_Evict, in_msg.addr, TBEs[in_msg.addr]);
         } else {
           trigger(Event:InReq_Dataless, in_msg.addr, TBEs[in_msg.addr]);
         }

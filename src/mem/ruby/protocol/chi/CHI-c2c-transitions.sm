@@ -27,21 +27,34 @@
  */
 
 // CHI C2C Gateway transition table
+// Phase 2: Full protocol flows including separated comp/data, atomics
 
 ////////////////////////////////////////////////////////////////////////////
 // TBE allocation from NoC requests
 ////////////////////////////////////////////////////////////////////////////
 
-transition({I, REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
-            WR_WAIT_COMP, WAIT_COMPACK, SNP_WAIT_RESP,
-            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK},
+transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
+            DL_WAIT_COMP, EV_WAIT_COMP,
+            REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
+            WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
+            SNP_WAIT_RESP,
+            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
+            FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
+            DL_FWD_WAIT, EV_FWD_WAIT,
+            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT},
            CheckAllocTBE) {
   checkAllocateTBE;
 }
 
-transition({I, REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
-            WR_WAIT_COMP, WAIT_COMPACK, SNP_WAIT_RESP,
-            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK},
+transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
+            DL_WAIT_COMP, EV_WAIT_COMP,
+            REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
+            WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
+            SNP_WAIT_RESP,
+            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
+            FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
+            DL_FWD_WAIT, EV_FWD_WAIT,
+            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT},
            CheckAllocTBE_WithCredit) {
   checkAllocateTBE_withCredit;
 }
@@ -50,7 +63,6 @@ transition({I, REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
 // Outbound read flow: local RN -> C2CG -> C2C -> remote HN
 ////////////////////////////////////////////////////////////////////////////
 
-// Read request from local RN targeting remote address
 transition(I, {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
                OutReq_ReadNoSnp, OutReq_ReadNotSharedDirty},
            REQ_SENT) {
@@ -61,24 +73,49 @@ transition(I, {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
   popReqRdyQueue;
 }
 
-// CompData or DataSepResp from remote (via C2C RX DAT) -> forward to local RN
-transition(REQ_SENT, {DatIn_CompData, DatIn_DataSepResp}, WAIT_COMPACK) {
+// Combined CompData from remote
+transition(REQ_SENT, DatIn_CompData, WAIT_COMPACK) {
   forwardC2CDatToLocal;
   clearExpectingData;
   popC2CRxDatQueue;
 }
 
-// Comp response from remote (for reads with separate resp)
+// Separated: DataSepResp first, wait for RespSepData
+transition(REQ_SENT, DatIn_DataSepResp, WAIT_COMP_ONLY) {
+  forwardC2CDatToLocal;
+  clearExpectingData;
+  popC2CRxDatQueue;
+}
+
+// Separated: RespSepData first, wait for DataSepResp
+transition(REQ_SENT, RspIn_RespSepData, WAIT_DATA_ONLY) {
+  forwardC2CRspToLocal;
+  popC2CRxRspQueue;
+}
+
+transition(WAIT_DATA_ONLY, DatIn_DataSepResp, WAIT_COMPACK) {
+  forwardC2CDatToLocal;
+  clearExpectingData;
+  popC2CRxDatQueue;
+}
+
+transition(WAIT_COMP_ONLY, RspIn_RespSepData, WAIT_COMPACK) {
+  forwardC2CRspToLocal;
+  popC2CRxRspQueue;
+}
+
+// Informational Comp for combined CompData reads (absorb)
 transition(REQ_SENT, RspIn_Comp) {
   popC2CRxRspQueue;
 }
 
-// ReadReceipt from remote
-transition(REQ_SENT, RspIn_ReadReceipt) {
+// ReadReceipt can arrive in any read-wait state
+transition({REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY},
+           RspIn_ReadReceipt) {
   popC2CRxRspQueue;
 }
 
-// CompAck from local RN -> forward to remote HN -> done
+// CompAck from local RN completes the outbound read
 transition(WAIT_COMPACK, RspIn_CompAck, I) {
   forwardRspToC2CTx;
   deallocateTBE;
@@ -90,7 +127,6 @@ transition(WAIT_COMPACK, RspIn_CompAck, I) {
 // Outbound write flow: local RN -> C2CG -> C2C -> remote HN
 ////////////////////////////////////////////////////////////////////////////
 
-// Write request from local RN targeting remote address
 transition(I, {OutReq_WriteUniqueFull, OutReq_WriteUniquePtl,
                OutReq_WriteBackFull, OutReq_WriteCleanFull,
                OutReq_WriteEvictFull, OutReq_WriteNoSnpFull,
@@ -102,19 +138,25 @@ transition(I, {OutReq_WriteUniqueFull, OutReq_WriteUniquePtl,
   popReqRdyQueue;
 }
 
-// CompDBIDResp or DBIDResp from remote -> forward to local RN
-transition(WR_WAIT_DBID, {RspIn_CompDBIDResp, RspIn_DBIDResp}, WR_WAIT_COMP) {
+transition(WR_WAIT_DBID, {RspIn_CompDBIDResp, RspIn_DBIDResp},
+           WR_WAIT_COMP) {
   forwardC2CRspToLocal;
   popC2CRxRspQueue;
 }
 
-// Write data from local RN -> forward to remote
+// WriteEvictFull dual-path: HN may respond with Comp directly (no DBID)
+transition(WR_WAIT_DBID, RspIn_Comp, I) {
+  forwardC2CRspToLocal;
+  deallocateTBE;
+  wakeUpStalled;
+  popC2CRxRspQueue;
+}
+
 transition(WR_WAIT_COMP, {DatIn_CBWrData, DatIn_NCBWrData}) {
   forwardDatToC2CTx;
   popDatInQueue;
 }
 
-// Comp from remote -> forward to local and deallocate
 transition(WR_WAIT_COMP, RspIn_Comp, I) {
   forwardC2CRspToLocal;
   deallocateTBE;
@@ -123,18 +165,71 @@ transition(WR_WAIT_COMP, RspIn_Comp, I) {
 }
 
 ////////////////////////////////////////////////////////////////////////////
-// Outbound dataless flow: CleanUnique, Evict
+// Outbound dataless: CleanUnique (needs CompAck) and Evict (no CompAck)
+// These use separate states because Comp has different terminal behavior.
 ////////////////////////////////////////////////////////////////////////////
 
-transition(I, {OutReq_CleanUnique, OutReq_Evict}, REQ_SENT) {
+transition(I, OutReq_CleanUnique, DL_WAIT_COMP) {
   allocateTBE;
   recordLocalIDs_fromReq;
   forwardReqToC2CTx;
   popReqRdyQueue;
 }
 
-// Comp for dataless -> done (no CompAck needed for Evict)
-// CleanUnique needs CompAck; handled via WAIT_COMPACK path above
+// CleanUnique: Comp from remote -> forward to local, wait for CompAck
+transition(DL_WAIT_COMP, RspIn_Comp, WAIT_COMPACK) {
+  forwardC2CRspToLocal;
+  popC2CRxRspQueue;
+}
+
+transition(I, OutReq_Evict, EV_WAIT_COMP) {
+  allocateTBE;
+  recordLocalIDs_fromReq;
+  forwardReqToC2CTx;
+  popReqRdyQueue;
+}
+
+// Evict: Comp from remote -> forward to local, done (no CompAck)
+transition(EV_WAIT_COMP, RspIn_Comp, I) {
+  forwardC2CRspToLocal;
+  deallocateTBE;
+  wakeUpStalled;
+  popC2CRxRspQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// Outbound atomic flow
+////////////////////////////////////////////////////////////////////////////
+
+transition(I, {OutReq_AtomicStore, OutReq_AtomicLoad},
+           ATOMIC_WAIT_RESP) {
+  allocateTBE;
+  recordLocalIDs_fromReq;
+  forwardReqToC2CTx;
+  popReqRdyQueue;
+}
+
+// AtomicNoReturn: Comp from remote
+transition(ATOMIC_WAIT_RESP, RspIn_Comp, I) {
+  forwardC2CRspToLocal;
+  deallocateTBE;
+  wakeUpStalled;
+  popC2CRxRspQueue;
+}
+
+// AtomicReturn: CompData from remote
+transition(ATOMIC_WAIT_RESP, DatIn_CompData, I) {
+  forwardC2CDatToLocal;
+  deallocateTBE;
+  wakeUpStalled;
+  popC2CRxDatQueue;
+}
+
+// Atomic write data from local RN (sent after request)
+transition(ATOMIC_WAIT_RESP, {DatIn_CBWrData, DatIn_NCBWrData}) {
+  forwardDatToC2CTx;
+  popDatInQueue;
+}
 
 ////////////////////////////////////////////////////////////////////////////
 // Inbound read flow: remote RN -> peer C2CG -> C2C -> this C2CG -> local HN
@@ -148,20 +243,44 @@ transition(I, InReq_Read, REQ_FWD) {
   popC2CRxReqQueue;
 }
 
-// CompData or DataSepResp from local HN -> forward to remote via C2C
-transition(REQ_FWD, {DatIn_CompData, DatIn_DataSepResp}, FWD_WAIT_COMPACK) {
+// Combined CompData from local HN
+transition(REQ_FWD, DatIn_CompData, FWD_WAIT_COMPACK) {
   forwardLocalDatToC2C;
   clearExpectingData;
   popDatInQueue;
 }
 
-// Comp from local HN (for separate data/comp)
+// Separated: DataSepResp first
+transition(REQ_FWD, DatIn_DataSepResp, FWD_WAIT_COMP_ONLY) {
+  forwardLocalDatToC2C;
+  clearExpectingData;
+  popDatInQueue;
+}
+
+// Separated: RespSepData first
+transition(REQ_FWD, RspIn_RespSepData, FWD_WAIT_DATA_ONLY) {
+  forwardLocalRspToC2C;
+  popRspInQueue;
+}
+
+transition(FWD_WAIT_DATA_ONLY, DatIn_DataSepResp, FWD_WAIT_COMPACK) {
+  forwardLocalDatToC2C;
+  clearExpectingData;
+  popDatInQueue;
+}
+
+transition(FWD_WAIT_COMP_ONLY, RspIn_RespSepData, FWD_WAIT_COMPACK) {
+  forwardLocalRspToC2C;
+  popRspInQueue;
+}
+
+// Informational Comp for combined CompData reads (forward, stay)
 transition(REQ_FWD, RspIn_Comp) {
   forwardLocalRspToC2C;
   popRspInQueue;
 }
 
-// CompAck from remote (via C2C) -> forward to local HN -> done
+// CompAck from remote completes the inbound read
 transition(FWD_WAIT_COMPACK, RspIn_CompAck, I) {
   forwardC2CRspToLocal;
   deallocateTBE;
@@ -169,15 +288,36 @@ transition(FWD_WAIT_COMPACK, RspIn_CompAck, I) {
   popC2CRxRspQueue;
 }
 
-// RetryAck from local HN (absorb - do NOT forward across C2C)
+////////////////////////////////////////////////////////////////////////////
+// Inbound retry handling
+// Each flow type has its own retry state to return to the correct state.
+////////////////////////////////////////////////////////////////////////////
+
 transition(REQ_FWD, RetryAckFromHN, REQ_RETRY_WAIT) {
   recordPCrdType;
   popRspInQueue;
 }
 
-// PCrdGrant from local HN -> re-issue the request
 transition(REQ_RETRY_WAIT, PCrdGrantFromHN, REQ_FWD) {
   reissueRequest;
+  popRspInQueue;
+}
+
+transition(WR_FWD_WAIT_DBID, RetryAckFromHN, WR_RETRY_WAIT) {
+  recordPCrdType;
+  popRspInQueue;
+}
+
+transition(WR_RETRY_WAIT, PCrdGrantFromHN, WR_FWD_WAIT_DBID) {
+  reissueRequest;
+  popRspInQueue;
+}
+
+// Dataless/Evict/Atomic share REQ_RETRY_WAIT for now.
+// TODO(Phase 3): split into per-flow retry states.
+transition({DL_FWD_WAIT, EV_FWD_WAIT, ATOMIC_FWD_WAIT},
+           RetryAckFromHN, REQ_RETRY_WAIT) {
+  recordPCrdType;
   popRspInQueue;
 }
 
@@ -192,19 +332,17 @@ transition(I, InReq_Write, WR_FWD_WAIT_DBID) {
   popC2CRxReqQueue;
 }
 
-// CompDBIDResp or DBIDResp from local HN -> forward to remote
-transition(WR_FWD_WAIT_DBID, {RspIn_CompDBIDResp, RspIn_DBIDResp}, WR_FWD_WAIT_DATA) {
+transition(WR_FWD_WAIT_DBID, {RspIn_CompDBIDResp, RspIn_DBIDResp},
+           WR_FWD_WAIT_DATA) {
   forwardLocalRspToC2C;
   popRspInQueue;
 }
 
-// Write data from remote via C2C -> forward to local HN
 transition(WR_FWD_WAIT_DATA, {DatIn_CBWrData, DatIn_NCBWrData}) {
   forwardC2CDatToLocal;
   popC2CRxDatQueue;
 }
 
-// Comp from local HN -> forward to remote and done
 transition(WR_FWD_WAIT_DATA, RspIn_Comp, I) {
   forwardLocalRspToC2C;
   deallocateTBE;
@@ -212,28 +350,83 @@ transition(WR_FWD_WAIT_DATA, RspIn_Comp, I) {
   popRspInQueue;
 }
 
-// RetryAck from local HN on inbound write
-transition(WR_FWD_WAIT_DBID, RetryAckFromHN, REQ_RETRY_WAIT) {
-  recordPCrdType;
+// WriteEvictFull dual-path: Comp directly from local HN
+transition(WR_FWD_WAIT_DBID, RspIn_Comp, I) {
+  forwardLocalRspToC2C;
+  deallocateTBE;
+  wakeUpStalled;
   popRspInQueue;
 }
 
 ////////////////////////////////////////////////////////////////////////////
-// Inbound dataless flow
+// Inbound dataless: CleanUnique and Evict (separate states)
 ////////////////////////////////////////////////////////////////////////////
 
-transition(I, InReq_Dataless, REQ_FWD) {
+transition(I, InReq_Dataless, DL_FWD_WAIT) {
   allocateTBE;
   recordRemoteIDs_fromC2CReq;
   forwardC2CReqToLocal;
   popC2CRxReqQueue;
 }
 
+// CleanUnique: Comp from local HN -> forward to remote, wait CompAck
+transition(DL_FWD_WAIT, RspIn_Comp, FWD_WAIT_COMPACK) {
+  forwardLocalRspToC2C;
+  popRspInQueue;
+}
+
+transition(I, InReq_Evict, EV_FWD_WAIT) {
+  allocateTBE;
+  recordRemoteIDs_fromC2CReq;
+  forwardC2CReqToLocal;
+  popC2CRxReqQueue;
+}
+
+// Evict: Comp from local HN -> forward to remote, done (no CompAck)
+transition(EV_FWD_WAIT, RspIn_Comp, I) {
+  forwardLocalRspToC2C;
+  deallocateTBE;
+  wakeUpStalled;
+  popRspInQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// Inbound atomic flow
+////////////////////////////////////////////////////////////////////////////
+
+transition(I, InReq_Atomic, ATOMIC_FWD_WAIT) {
+  allocateTBE;
+  recordRemoteIDs_fromC2CReq;
+  forwardC2CReqToLocal;
+  popC2CRxReqQueue;
+}
+
+// AtomicNoReturn: Comp from local HN
+transition(ATOMIC_FWD_WAIT, RspIn_Comp, I) {
+  forwardLocalRspToC2C;
+  deallocateTBE;
+  wakeUpStalled;
+  popRspInQueue;
+}
+
+// AtomicReturn: CompData from local HN
+transition(ATOMIC_FWD_WAIT, DatIn_CompData, I) {
+  forwardLocalDatToC2C;
+  deallocateTBE;
+  wakeUpStalled;
+  popDatInQueue;
+}
+
+// Atomic write data from remote (sent after request via C2C)
+transition(ATOMIC_FWD_WAIT, {DatIn_CBWrData, DatIn_NCBWrData}) {
+  forwardC2CDatToLocal;
+  popC2CRxDatQueue;
+}
+
 ////////////////////////////////////////////////////////////////////////////
 // Snoop flow: local HN -> this C2CG -> C2C -> peer C2CG -> remote RN
 ////////////////////////////////////////////////////////////////////////////
 
-// Snoop from local HN targeting remote cacher
 transition(I, OutSnp_Forward, SNP_WAIT_RESP) {
   allocateSnpTBE;
   recordSnpIDs_fromSnp;
@@ -241,41 +434,51 @@ transition(I, OutSnp_Forward, SNP_WAIT_RESP) {
   popSnpInQueue;
 }
 
-// Snoop response from remote (via C2C RSP) -> forward to local HN
 transition(SNP_WAIT_RESP, RspIn_SnpResp, I) {
-  forwardSnpRspToC2C;
+  forwardC2CSnpRspToLocal;
   deallocateSnpTBE;
   popC2CRxRspQueue;
 }
 
-// Snoop response data from remote (via C2C DAT) -> forward to local HN
 transition(SNP_WAIT_RESP, DatIn_SnpRespData, I) {
-  forwardSnpRspDatToC2C;
+  forwardC2CSnpDatToLocal;
   deallocateSnpTBE;
   popC2CRxDatQueue;
 }
 
-// Inbound snoop from remote (via C2C SNP) -> stateless broadcast to local
+// Inbound snoop from remote -> stateless broadcast to local
 transition(I, InSnp_Deliver) {
   forwardC2CSnpToLocal;
   popC2CRxSnpQueue;
 }
 
 ////////////////////////////////////////////////////////////////////////////
-// Retry handling
+// Retry/credit trigger queue (valid in all states)
 ////////////////////////////////////////////////////////////////////////////
 
-transition({I, REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
-            WR_WAIT_COMP, WAIT_COMPACK, SNP_WAIT_RESP,
-            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK},
+transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
+            DL_WAIT_COMP, EV_WAIT_COMP,
+            REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
+            WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
+            SNP_WAIT_RESP,
+            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
+            FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
+            DL_FWD_WAIT, EV_FWD_WAIT,
+            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT},
            SendRetryAck) {
   sendRetryAck;
   popRetryTriggerQueue;
 }
 
-transition({I, REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
-            WR_WAIT_COMP, WAIT_COMPACK, SNP_WAIT_RESP,
-            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK},
+transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
+            DL_WAIT_COMP, EV_WAIT_COMP,
+            REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
+            WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
+            SNP_WAIT_RESP,
+            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
+            FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
+            DL_FWD_WAIT, EV_FWD_WAIT,
+            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT},
            SendPCrdGrant) {
   sendPCrdGrant;
   popRetryTriggerQueue;
@@ -285,15 +488,21 @@ transition({I, REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
 // Stall transitions for busy addresses
 ////////////////////////////////////////////////////////////////////////////
 
-transition({REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
-            WR_WAIT_COMP, WAIT_COMPACK, WR_FWD_WAIT_DBID,
-            WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK},
+transition({REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
+            DL_WAIT_COMP, EV_WAIT_COMP,
+            REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
+            WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
+            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
+            FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
+            DL_FWD_WAIT, EV_FWD_WAIT,
+            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT},
            {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
             OutReq_ReadNoSnp, OutReq_ReadNotSharedDirty,
             OutReq_CleanUnique, OutReq_Evict,
             OutReq_WriteUniqueFull, OutReq_WriteUniquePtl,
             OutReq_WriteBackFull, OutReq_WriteCleanFull,
             OutReq_WriteEvictFull, OutReq_WriteNoSnpFull,
-            OutReq_WriteNoSnpPtl}) {
+            OutReq_WriteNoSnpPtl,
+            OutReq_AtomicStore, OutReq_AtomicLoad}) {
   stallRequestQueue;
 }

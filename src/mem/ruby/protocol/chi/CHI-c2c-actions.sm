@@ -81,6 +81,7 @@ action(allocateTBE, "atbe", desc="Allocate TBE for a transaction") {
   tbe.isSnoop := false;
   tbe.isDVM := false;
   tbe.isDataless := false;
+  tbe.isAtomic := false;
   tbe.rxtxBytes := 0;
 }
 
@@ -115,6 +116,7 @@ action(allocateSnpTBE, "asnptbe", desc="Allocate snoop TBE") {
   tbe.isWrite := false;
   tbe.isDVM := false;
   tbe.isDataless := false;
+  tbe.isAtomic := false;
   tbe.retryPending := false;
   tbe.expectingData := false;
   tbe.expectingComp := false;
@@ -143,6 +145,7 @@ action(recordLocalIDs_fromReq, "rlid", desc="Record local IDs from request") {
     tbe.isRead := isReadRequest(in_msg.type);
     tbe.isWrite := isWriteRequest(in_msg.type);
     tbe.isDataless := isDatalessRequest(in_msg.type);
+    tbe.isAtomic := isAtomicRequest(in_msg.type);
   }
 }
 
@@ -157,6 +160,7 @@ action(recordRemoteIDs_fromC2CReq, "rrid", desc="Record remote IDs from C2C req"
     tbe.isRead := isReadRequest(in_msg.type);
     tbe.isWrite := isWriteRequest(in_msg.type);
     tbe.isDataless := isDatalessRequest(in_msg.type);
+    tbe.isAtomic := isAtomicRequest(in_msg.type);
   }
 }
 
@@ -231,6 +235,35 @@ action(forwardSnpToC2CTx, "fwdSnpC2C", desc="Forward snoop to C2C TX SNP") {
       out_msg := in_msg;
       out_msg.isC2C := true;
       out_msg.c2cSrcGateway := machineID;
+    }
+  }
+}
+
+// Forward snoop response from C2C RSP to local NoC RSP
+// (Used when snoop response arrives on rspIn from C2C peer)
+action(forwardC2CSnpRspToLocal, "fwdC2CSnpRspL",
+       desc="Forward C2C snoop resp to local HN") {
+  assert(is_valid(tbe));
+  peek(c2cRxRspInPort, CHIResponseMsg) {
+    enqueue(rspOutPort, CHIResponseMsg, response_latency) {
+      out_msg := in_msg;
+      out_msg.isC2C := false;
+      out_msg.Destination.clear();
+      out_msg.Destination.add(tbe.localSrcID);
+    }
+  }
+}
+
+// Forward snoop response data from C2C DAT to local NoC DAT
+action(forwardC2CSnpDatToLocal, "fwdC2CSnpDatL",
+       desc="Forward C2C snoop resp data to local HN") {
+  assert(is_valid(tbe));
+  peek(c2cRxDatInPort, CHIDataMsg) {
+    enqueue(datOutPort, CHIDataMsg, data_latency) {
+      out_msg := in_msg;
+      out_msg.isC2C := false;
+      out_msg.Destination.clear();
+      out_msg.Destination.add(tbe.localSrcID);
     }
   }
 }
@@ -329,32 +362,6 @@ action(forwardC2CSnpToLocal, "fwdC2CSnpL", desc="Forward C2C snoop to local") {
   }
 }
 
-// Forward local snoop response back to C2C
-action(forwardSnpRspToC2C, "fwdSnpRspC2C", desc="Forward snoop resp to C2C") {
-  assert(is_valid(tbe));
-  peek(rspInPort, CHIResponseMsg) {
-    enqueue(c2cTxRspOutPort, CHIResponseMsg, response_latency) {
-      out_msg := in_msg;
-      out_msg.isC2C := true;
-      out_msg.c2cSrcGateway := machineID;
-      out_msg.Destination.clear();
-      out_msg.Destination.add(tbe.localSrcID);
-    }
-  }
-}
-
-action(forwardSnpRspDatToC2C, "fwdSnpDatC2C", desc="Forward snoop resp data to C2C") {
-  assert(is_valid(tbe));
-  peek(datInPort, CHIDataMsg) {
-    enqueue(c2cTxDatOutPort, CHIDataMsg, data_latency) {
-      out_msg := in_msg;
-      out_msg.isC2C := true;
-      out_msg.c2cSrcGateway := machineID;
-      out_msg.Destination.clear();
-      out_msg.Destination.add(tbe.localSrcID);
-    }
-  }
-}
 
 ////////////////////////////////////////////////////////////////////////////
 // Retry handling

@@ -28,7 +28,7 @@
 
 // CHI C2C Gateway Controller
 // Implements the protocol-layer gateway per IHI0098A (AMBA CHI C2C)
-// Phase 1: Foundation - basic request/response/snoop forwarding
+// Phase 2: Protocol flows - separated comp/data, atomics, error handling
 
 machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
@@ -94,24 +94,46 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     // Outbound request path (local RN -> C2CG -> remote HN)
     REQ_SENT,          AccessPermission:Busy,
         desc="Outbound request forwarded, awaiting response";
+    WAIT_DATA_ONLY,    AccessPermission:Busy,
+        desc="RespSepData arrived, waiting for DataSepResp only";
+    WAIT_COMP_ONLY,    AccessPermission:Busy,
+        desc="DataSepResp arrived, waiting for RespSepData only";
     WR_WAIT_DBID,      AccessPermission:Busy,
         desc="Waiting for DBIDResp from remote for write";
     WR_WAIT_COMP,      AccessPermission:Busy,
         desc="Waiting for Comp from remote HN for write";
     WAIT_COMPACK,      AccessPermission:Busy,
         desc="Waiting for CompAck from local RN";
+    DL_WAIT_COMP,      AccessPermission:Busy,
+        desc="Outbound CleanUnique awaiting Comp (needs CompAck)";
+    EV_WAIT_COMP,      AccessPermission:Busy,
+        desc="Outbound Evict awaiting Comp (no CompAck)";
+    ATOMIC_WAIT_RESP,  AccessPermission:Busy,
+        desc="Atomic request sent, awaiting CompData";
 
     // Inbound request path (remote -> C2C -> this C2CG -> local HN)
     REQ_FWD,           AccessPermission:Busy,
         desc="Inbound request issued to local HN";
     REQ_RETRY_WAIT,    AccessPermission:Busy,
         desc="Local HN sent RetryAck, waiting for PCrdGrant";
+    WR_RETRY_WAIT,     AccessPermission:Busy,
+        desc="Inbound write retry waiting for PCrdGrant";
     WR_FWD_WAIT_DBID,  AccessPermission:Busy,
         desc="Inbound write waiting for DBIDResp from local HN";
     WR_FWD_WAIT_DATA,  AccessPermission:Busy,
         desc="Waiting for write data from remote to forward";
     FWD_WAIT_COMPACK,  AccessPermission:Busy,
         desc="Waiting for CompAck from remote";
+    FWD_WAIT_DATA_ONLY, AccessPermission:Busy,
+        desc="Inbound: RespSepData sent, waiting for DataSepResp";
+    FWD_WAIT_COMP_ONLY, AccessPermission:Busy,
+        desc="Inbound: DataSepResp fwd'd, waiting for RespSepData";
+    DL_FWD_WAIT,       AccessPermission:Busy,
+        desc="Inbound CleanUnique waiting for Comp from local HN";
+    EV_FWD_WAIT,       AccessPermission:Busy,
+        desc="Inbound Evict waiting for Comp from local HN";
+    ATOMIC_FWD_WAIT,   AccessPermission:Busy,
+        desc="Inbound atomic waiting for CompData from local HN";
 
     // Snoop path
     SNP_WAIT_RESP,     AccessPermission:Busy,
@@ -143,11 +165,15 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     OutReq_WriteNoSnpFull,       desc="WriteNoSnpFull for remote";
     OutReq_WriteNoSnpPtl,        desc="WriteNoSnpPtl for remote";
     OutReq_Evict,                desc="Evict for remote";
+    OutReq_AtomicStore,          desc="AtomicNoReturn for remote";
+    OutReq_AtomicLoad,           desc="AtomicReturn for remote";
 
     // Inbound request events (C2C -> local NoC)
     InReq_Read,                  desc="Inbound read from remote";
     InReq_Write,                 desc="Inbound write from remote";
     InReq_Dataless,              desc="Inbound dataless from remote";
+    InReq_Evict,                 desc="Inbound Evict from remote";
+    InReq_Atomic,                desc="Inbound atomic from remote";
 
     // Snoop events
     OutSnp_Forward,              desc="Snoop from local HN to forward";
@@ -159,6 +185,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     RspIn_DBIDResp,              desc="DBIDResp received";
     RspIn_CompAck,               desc="CompAck received";
     RspIn_ReadReceipt,           desc="ReadReceipt received";
+    RspIn_RespSepData,           desc="RespSepData (split comp) received";
     RspIn_SnpResp,               desc="Snoop response (no data)";
 
     // Data events
@@ -194,6 +221,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     bool isSnoop,               desc="Is snoop forwarding";
     bool isDVM,                 desc="Is DVM transaction";
     bool isDataless,            desc="Is dataless transaction";
+    bool isAtomic,              desc="Is atomic transaction";
     MachineID localSrcID,       desc="Local source MachineID";
     Addr localTxnID,            desc="Local TxnID";
     MachineID remoteSrcID,      desc="Remote source MachineID";
