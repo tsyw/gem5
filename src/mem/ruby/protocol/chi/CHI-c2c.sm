@@ -1,0 +1,296 @@
+/*
+ * Copyright (c) 2025 The gem5 Contributors
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met: redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer;
+ * redistributions in binary form must reproduce the above copyright
+ * notice, this list of conditions and the following disclaimer in the
+ * documentation and/or other materials provided with the distribution;
+ * neither the name of the copyright holders nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+// CHI C2C Gateway Controller
+// Implements the protocol-layer gateway per IHI0098A (AMBA CHI C2C)
+// Phase 1: Foundation - basic request/response/snoop forwarding
+
+machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
+
+  // Latency parameters
+  Cycles request_latency := 1;
+  Cycles response_latency := 1;
+  Cycles snoop_latency := 1;
+  Cycles data_latency := 1;
+  Cycles stall_recycle_lat := 1;
+
+  // TBE sizing
+  int number_of_snoop_TBEs;
+
+  // Data channel width
+  int data_channel_size;
+
+  // NoC-side message buffers (connected to Ruby network)
+  MessageBuffer * reqOut,  network="To", virtual_network="0",
+                           vnet_type="none";
+  MessageBuffer * snpOut,  network="To", virtual_network="1",
+                           vnet_type="none";
+  MessageBuffer * rspOut,  network="To", virtual_network="2",
+                           vnet_type="none";
+  MessageBuffer * datOut,  network="To", virtual_network="3",
+                           vnet_type="response";
+
+  MessageBuffer * reqIn,   network="From", virtual_network="0",
+                           vnet_type="none";
+  MessageBuffer * snpIn,   network="From", virtual_network="1",
+                           vnet_type="none";
+  MessageBuffer * rspIn,   network="From", virtual_network="2",
+                           vnet_type="none";
+  MessageBuffer * datIn,   network="From", virtual_network="3",
+                           vnet_type="response";
+
+  // C2C-side message buffers (point-to-point, not on Ruby network)
+  MessageBuffer * c2cTxReq;
+  MessageBuffer * c2cTxSnp;
+  MessageBuffer * c2cTxRsp;
+  MessageBuffer * c2cTxDat;
+
+  MessageBuffer * c2cRxReq;
+  MessageBuffer * c2cRxSnp;
+  MessageBuffer * c2cRxRsp;
+  MessageBuffer * c2cRxDat;
+
+  // Internal queues
+  MessageBuffer * triggerQueue;
+  MessageBuffer * retryTriggerQueue;
+  MessageBuffer * reqRdy;
+
+{
+
+  ////////////////////////////////////////////////////////////////////////////
+  // States
+  ////////////////////////////////////////////////////////////////////////////
+
+  state_declaration(State, default="CHI_C2C_State_I") {
+    // Default: no active transaction
+    I,                 AccessPermission:Invalid,
+        desc="No active transaction for this address";
+
+    // Outbound request path (local RN -> C2CG -> remote HN)
+    REQ_SENT,          AccessPermission:Busy,
+        desc="Outbound request forwarded, awaiting response";
+    WR_WAIT_DBID,      AccessPermission:Busy,
+        desc="Waiting for DBIDResp from remote for write";
+    WR_WAIT_COMP,      AccessPermission:Busy,
+        desc="Waiting for Comp from remote HN for write";
+    WAIT_COMPACK,      AccessPermission:Busy,
+        desc="Waiting for CompAck from local RN";
+
+    // Inbound request path (remote -> C2C -> this C2CG -> local HN)
+    REQ_FWD,           AccessPermission:Busy,
+        desc="Inbound request issued to local HN";
+    REQ_RETRY_WAIT,    AccessPermission:Busy,
+        desc="Local HN sent RetryAck, waiting for PCrdGrant";
+    WR_FWD_WAIT_DBID,  AccessPermission:Busy,
+        desc="Inbound write waiting for DBIDResp from local HN";
+    WR_FWD_WAIT_DATA,  AccessPermission:Busy,
+        desc="Waiting for write data from remote to forward";
+    FWD_WAIT_COMPACK,  AccessPermission:Busy,
+        desc="Waiting for CompAck from remote";
+
+    // Snoop path
+    SNP_WAIT_RESP,     AccessPermission:Busy,
+        desc="Snoop forwarded across C2C, awaiting response";
+  }
+
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Events
+  ////////////////////////////////////////////////////////////////////////////
+
+  enumeration(Event, desc="C2C Gateway events") {
+    // TBE allocation events from NoC
+    CheckAllocTBE,               desc="Check TBE avail for new request";
+    CheckAllocTBE_WithCredit,    desc="Alloc TBE with pre-granted credit";
+
+    // Outbound request events (local NoC -> C2C)
+    OutReq_ReadShared,           desc="ReadShared for remote address";
+    OutReq_ReadUnique,           desc="ReadUnique for remote address";
+    OutReq_ReadOnce,             desc="ReadOnce for remote address";
+    OutReq_ReadNoSnp,            desc="ReadNoSnp for remote address";
+    OutReq_ReadNotSharedDirty,   desc="ReadNotSharedDirty for remote";
+    OutReq_CleanUnique,          desc="CleanUnique for remote address";
+    OutReq_WriteUniqueFull,      desc="WriteUniqueFull for remote";
+    OutReq_WriteUniquePtl,       desc="WriteUniquePtl for remote";
+    OutReq_WriteBackFull,        desc="WriteBackFull for remote";
+    OutReq_WriteCleanFull,       desc="WriteCleanFull for remote";
+    OutReq_WriteEvictFull,       desc="WriteEvictFull for remote";
+    OutReq_WriteNoSnpFull,       desc="WriteNoSnpFull for remote";
+    OutReq_WriteNoSnpPtl,        desc="WriteNoSnpPtl for remote";
+    OutReq_Evict,                desc="Evict for remote";
+
+    // Inbound request events (C2C -> local NoC)
+    InReq_Read,                  desc="Inbound read from remote";
+    InReq_Write,                 desc="Inbound write from remote";
+    InReq_Dataless,              desc="Inbound dataless from remote";
+
+    // Snoop events
+    OutSnp_Forward,              desc="Snoop from local HN to forward";
+    InSnp_Deliver,               desc="Inbound snoop to deliver locally";
+
+    // Response events
+    RspIn_Comp,                  desc="Comp response received";
+    RspIn_CompDBIDResp,          desc="CompDBIDResp received";
+    RspIn_DBIDResp,              desc="DBIDResp received";
+    RspIn_CompAck,               desc="CompAck received";
+    RspIn_ReadReceipt,           desc="ReadReceipt received";
+    RspIn_SnpResp,               desc="Snoop response (no data)";
+
+    // Data events
+    DatIn_CompData,              desc="CompData received";
+    DatIn_DataSepResp,           desc="DataSepResp received";
+    DatIn_SnpRespData,           desc="SnpRespData received";
+    DatIn_CBWrData,              desc="CBWrData received";
+    DatIn_NCBWrData,             desc="NCBWrData received";
+
+    // Retry handling
+    RetryAckFromHN,              desc="RetryAck from local HN (absorb)";
+    PCrdGrantFromHN,             desc="PCrdGrant from local HN";
+    SendRetryAck,                desc="Send RetryAck to requester";
+    SendPCrdGrant,               desc="Send PCrdGrant to requester";
+  }
+
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Data structures
+  ////////////////////////////////////////////////////////////////////////////
+
+  // Cache block size
+  int blockSize, default="m_ruby_system->getBlockSizeBytes()";
+
+  // TBE: Transaction Buffer Entry
+  structure(TBE, desc="C2C Gateway Transaction Buffer Entry") {
+    int storSlot,               desc="Slot in storage tracker";
+    Addr addr,                  desc="Cache line address";
+    State state,                desc="Current SLICC state";
+    CHIRequestType reqType,     desc="Original request type";
+    bool isRead,                desc="Is read transaction";
+    bool isWrite,               desc="Is write transaction";
+    bool isSnoop,               desc="Is snoop forwarding";
+    bool isDVM,                 desc="Is DVM transaction";
+    bool isDataless,            desc="Is dataless transaction";
+    MachineID localSrcID,       desc="Local source MachineID";
+    Addr localTxnID,            desc="Local TxnID";
+    MachineID remoteSrcID,      desc="Remote source MachineID";
+    Addr remoteTxnID,           desc="Remote TxnID";
+    MachineID peerC2CG,         desc="Peer C2CG on remote chip";
+    bool expectingData,         desc="Waiting for data";
+    bool expectingComp,         desc="Waiting for completion";
+    int pendingSnpResps,        desc="Outstanding snoop responses";
+    bool retryPending,          desc="HN sent RetryAck";
+    Tick allocTime,             desc="Cycle when allocated";
+    DataBlock dataBlk,          desc="Transaction data buffer";
+    WriteMask dataBlkValid,     desc="Valid bytes in data buffer";
+    int rxtxBytes,              desc="Bytes sent or received";
+  }
+
+  // TBE table for request transactions
+  structure(TBETable, external="yes") {
+    TBE lookup(Addr);
+    void allocate(Addr);
+    void deallocate(Addr);
+    bool isPresent(Addr);
+    bool areNSlotsAvailable(int n, Tick curTime);
+  }
+
+  structure(TBEStorage, external="yes") {
+    int size();
+    int capacity();
+    int reserved();
+    int slotsAvailable();
+    bool areNSlotsAvailable(int n);
+    void incrementReserved();
+    void decrementReserved();
+    int addEntryToNewSlot();
+    void removeEntryFromSlot(int slot);
+  }
+
+  TBETable TBEs, template="<CHI_C2C_TBE>",
+      constructor="m_number_of_TBEs";
+  TBEStorage storTBEs,
+      constructor='this, m_number_of_TBEs, "TBEs"';
+
+  // Separate TBE table for snoop forwarding (deadlock avoidance)
+  TBETable snpTBEs, template="<CHI_C2C_TBE>",
+      constructor="m_number_of_snoop_TBEs";
+  TBEStorage storSnpTBEs,
+      constructor='this, m_number_of_snoop_TBEs, "snpTBEs"';
+
+  // Retry queue
+  structure(RetryQueueEntry) {
+    Addr addr,           desc="Line address";
+    MachineID retryDest, desc="Retry destination";
+  }
+
+  structure(TriggerQueue, external="yes") {
+    void pop();
+    bool empty();
+    void emplace(Addr, MachineID);
+    RetryQueueEntry next();
+  }
+
+  TriggerQueue retryQueue, template="<CHI_C2C_RetryQueueEntry>";
+
+  // Internal trigger message types
+  structure(TriggerMsg, desc="Internal trigger", interface="Message") {
+    Addr addr;
+    Event event;
+    bool functionalRead(Packet *pkt) { return false; }
+    bool functionalRead(Packet *pkt, WriteMask &mask) { return false; }
+    bool functionalWrite(Packet *pkt) { return false; }
+  }
+
+  structure(RetryTriggerMsg, desc="Retry trigger", interface="Message") {
+    Addr addr;
+    Event event;
+    MachineID retryDest;
+    bool functionalRead(Packet *pkt) { return false; }
+    bool functionalRead(Packet *pkt, WriteMask &mask) { return false; }
+    bool functionalWrite(Packet *pkt) { return false; }
+  }
+
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Port definitions (includes funcs.sm for helpers)
+  ////////////////////////////////////////////////////////////////////////////
+
+  include "CHI-c2c-ports.sm";
+  // CHI-c2c-ports.sm includes CHI-c2c-funcs.sm
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Action definitions (must come after in_port declarations)
+  ////////////////////////////////////////////////////////////////////////////
+
+  include "CHI-c2c-actions.sm";
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Transition table
+  ////////////////////////////////////////////////////////////////////////////
+
+  include "CHI-c2c-transitions.sm";
+}

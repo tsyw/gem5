@@ -127,6 +127,12 @@ structure(CHIRequestMsg, desc="", interface="Message") {
 
   MessageSizeType MessageSize, default="MessageSizeType_Control";
 
+  // C2C tracking fields (IHI0098A B4.2)
+  bool isC2C,              default="false", desc="True if message crossed C2C boundary";
+  MachineID origSrcID,     desc="Original SrcID before C2CG rewrite";
+  Addr origTxnId,          default="0", desc="Original TxnID before C2CG rewrite";
+  MachineID c2cSrcGateway, desc="C2CG that sent this message";
+
   // No data for functional access
   bool functionalRead(Packet *pkt) { return false; }
   bool functionalRead(Packet *pkt, WriteMask &mask) { return false; }
@@ -177,6 +183,10 @@ structure(CHIResponseMsg, desc="", interface="Message") {
 
   MessageSizeType MessageSize, default="MessageSizeType_Control";
 
+  // C2C tracking fields
+  bool isC2C,              default="false", desc="True if response is part of C2C transaction";
+  MachineID c2cSrcGateway, desc="C2CG that should receive this response";
+
   // No data for functional access
   bool functionalRead(Packet *pkt) { return false; }
   bool functionalRead(Packet *pkt, WriteMask &mask) { return false; }
@@ -224,6 +234,10 @@ structure(CHIDataMsg, desc="", interface="Message") {
   bool usesTxnId,       desc="True if using a Transaction ID", default="false";
   Addr txnId,           desc="Transaction ID", default="0";
 
+  // C2C tracking fields
+  bool isC2C,              default="false", desc="True if data is part of C2C transaction";
+  MachineID c2cSrcGateway, desc="C2CG that should receive this data";
+
   MessageSizeType MessageSize, default="MessageSizeType_Data";
 
   bool functionalRead(Packet *pkt) {
@@ -265,4 +279,30 @@ structure(CHIDataMsg, desc="", interface="Message") {
   bool functionalWrite(Packet *pkt) {
     return testAndWrite(addr, dataBlk, pkt);
   }
+}
+
+// ---- C2C Gateway MISC channel ----
+
+enumeration(CHI_C2C_MiscMsgType, desc="C2C MISC message types") {
+  CreditGrant,       desc="Credit grant for C2C flow control";
+  CreditReturn,      desc="Credit return after message consumed";
+  null,              desc="Null type";
+}
+
+structure(CHI_C2C_MiscMsg, desc="C2C MISC channel messages",
+          interface="Message") {
+  CHI_C2C_MiscMsgType type, desc="MISC message type";
+  MachineID sender,         desc="Sender gateway ID";
+  Addr addr,                default="0", desc="Address if applicable";
+  int reqCredit,            default="0", desc="REQ channel credits";
+  int snpCredit,            default="0", desc="SNP channel credits";
+  int rspCredit,            default="0", desc="RSP channel credits";
+  int datCredit,            default="0", desc="DAT channel credits";
+  int miscCredit,           default="0", desc="MISC channel credits";
+
+  MessageSizeType MessageSize, default="MessageSizeType_Control";
+
+  bool functionalRead(Packet *pkt) { return false; }
+  bool functionalRead(Packet *pkt, WriteMask &mask) { return false; }
+  bool functionalWrite(Packet *pkt) { return false; }
 }

@@ -1,0 +1,299 @@
+/*
+ * Copyright (c) 2025 The gem5 Contributors
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met: redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer;
+ * redistributions in binary form must reproduce the above copyright
+ * notice, this list of conditions and the following disclaimer in the
+ * documentation and/or other materials provided with the distribution;
+ * neither the name of the copyright holders nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+// CHI C2C Gateway transition table
+
+////////////////////////////////////////////////////////////////////////////
+// TBE allocation from NoC requests
+////////////////////////////////////////////////////////////////////////////
+
+transition({I, REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
+            WR_WAIT_COMP, WAIT_COMPACK, SNP_WAIT_RESP,
+            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK},
+           CheckAllocTBE) {
+  checkAllocateTBE;
+}
+
+transition({I, REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
+            WR_WAIT_COMP, WAIT_COMPACK, SNP_WAIT_RESP,
+            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK},
+           CheckAllocTBE_WithCredit) {
+  checkAllocateTBE_withCredit;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// Outbound read flow: local RN -> C2CG -> C2C -> remote HN
+////////////////////////////////////////////////////////////////////////////
+
+// Read request from local RN targeting remote address
+transition(I, {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
+               OutReq_ReadNoSnp, OutReq_ReadNotSharedDirty},
+           REQ_SENT) {
+  allocateTBE;
+  recordLocalIDs_fromReq;
+  setExpectingData;
+  forwardReqToC2CTx;
+  popReqRdyQueue;
+}
+
+// CompData or DataSepResp from remote (via C2C RX DAT) -> forward to local RN
+transition(REQ_SENT, {DatIn_CompData, DatIn_DataSepResp}, WAIT_COMPACK) {
+  forwardC2CDatToLocal;
+  clearExpectingData;
+  popC2CRxDatQueue;
+}
+
+// Comp response from remote (for reads with separate resp)
+transition(REQ_SENT, RspIn_Comp) {
+  popC2CRxRspQueue;
+}
+
+// ReadReceipt from remote
+transition(REQ_SENT, RspIn_ReadReceipt) {
+  popC2CRxRspQueue;
+}
+
+// CompAck from local RN -> forward to remote HN -> done
+transition(WAIT_COMPACK, RspIn_CompAck, I) {
+  forwardRspToC2CTx;
+  deallocateTBE;
+  wakeUpStalled;
+  popRspInQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// Outbound write flow: local RN -> C2CG -> C2C -> remote HN
+////////////////////////////////////////////////////////////////////////////
+
+// Write request from local RN targeting remote address
+transition(I, {OutReq_WriteUniqueFull, OutReq_WriteUniquePtl,
+               OutReq_WriteBackFull, OutReq_WriteCleanFull,
+               OutReq_WriteEvictFull, OutReq_WriteNoSnpFull,
+               OutReq_WriteNoSnpPtl},
+           WR_WAIT_DBID) {
+  allocateTBE;
+  recordLocalIDs_fromReq;
+  forwardReqToC2CTx;
+  popReqRdyQueue;
+}
+
+// CompDBIDResp or DBIDResp from remote -> forward to local RN
+transition(WR_WAIT_DBID, {RspIn_CompDBIDResp, RspIn_DBIDResp}, WR_WAIT_COMP) {
+  forwardC2CRspToLocal;
+  popC2CRxRspQueue;
+}
+
+// Write data from local RN -> forward to remote
+transition(WR_WAIT_COMP, {DatIn_CBWrData, DatIn_NCBWrData}) {
+  forwardDatToC2CTx;
+  popDatInQueue;
+}
+
+// Comp from remote -> forward to local and deallocate
+transition(WR_WAIT_COMP, RspIn_Comp, I) {
+  forwardC2CRspToLocal;
+  deallocateTBE;
+  wakeUpStalled;
+  popC2CRxRspQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// Outbound dataless flow: CleanUnique, Evict
+////////////////////////////////////////////////////////////////////////////
+
+transition(I, {OutReq_CleanUnique, OutReq_Evict}, REQ_SENT) {
+  allocateTBE;
+  recordLocalIDs_fromReq;
+  forwardReqToC2CTx;
+  popReqRdyQueue;
+}
+
+// Comp for dataless -> done (no CompAck needed for Evict)
+// CleanUnique needs CompAck; handled via WAIT_COMPACK path above
+
+////////////////////////////////////////////////////////////////////////////
+// Inbound read flow: remote RN -> peer C2CG -> C2C -> this C2CG -> local HN
+////////////////////////////////////////////////////////////////////////////
+
+transition(I, InReq_Read, REQ_FWD) {
+  allocateTBE;
+  recordRemoteIDs_fromC2CReq;
+  setExpectingData;
+  forwardC2CReqToLocal;
+  popC2CRxReqQueue;
+}
+
+// CompData or DataSepResp from local HN -> forward to remote via C2C
+transition(REQ_FWD, {DatIn_CompData, DatIn_DataSepResp}, FWD_WAIT_COMPACK) {
+  forwardLocalDatToC2C;
+  clearExpectingData;
+  popDatInQueue;
+}
+
+// Comp from local HN (for separate data/comp)
+transition(REQ_FWD, RspIn_Comp) {
+  forwardLocalRspToC2C;
+  popRspInQueue;
+}
+
+// CompAck from remote (via C2C) -> forward to local HN -> done
+transition(FWD_WAIT_COMPACK, RspIn_CompAck, I) {
+  forwardC2CRspToLocal;
+  deallocateTBE;
+  wakeUpStalled;
+  popC2CRxRspQueue;
+}
+
+// RetryAck from local HN (absorb - do NOT forward across C2C)
+transition(REQ_FWD, RetryAckFromHN, REQ_RETRY_WAIT) {
+  recordPCrdType;
+  popRspInQueue;
+}
+
+// PCrdGrant from local HN -> re-issue the request
+transition(REQ_RETRY_WAIT, PCrdGrantFromHN, REQ_FWD) {
+  reissueRequest;
+  popRspInQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// Inbound write flow
+////////////////////////////////////////////////////////////////////////////
+
+transition(I, InReq_Write, WR_FWD_WAIT_DBID) {
+  allocateTBE;
+  recordRemoteIDs_fromC2CReq;
+  forwardC2CReqToLocal;
+  popC2CRxReqQueue;
+}
+
+// CompDBIDResp or DBIDResp from local HN -> forward to remote
+transition(WR_FWD_WAIT_DBID, {RspIn_CompDBIDResp, RspIn_DBIDResp}, WR_FWD_WAIT_DATA) {
+  forwardLocalRspToC2C;
+  popRspInQueue;
+}
+
+// Write data from remote via C2C -> forward to local HN
+transition(WR_FWD_WAIT_DATA, {DatIn_CBWrData, DatIn_NCBWrData}) {
+  forwardC2CDatToLocal;
+  popC2CRxDatQueue;
+}
+
+// Comp from local HN -> forward to remote and done
+transition(WR_FWD_WAIT_DATA, RspIn_Comp, I) {
+  forwardLocalRspToC2C;
+  deallocateTBE;
+  wakeUpStalled;
+  popRspInQueue;
+}
+
+// RetryAck from local HN on inbound write
+transition(WR_FWD_WAIT_DBID, RetryAckFromHN, REQ_RETRY_WAIT) {
+  recordPCrdType;
+  popRspInQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// Inbound dataless flow
+////////////////////////////////////////////////////////////////////////////
+
+transition(I, InReq_Dataless, REQ_FWD) {
+  allocateTBE;
+  recordRemoteIDs_fromC2CReq;
+  forwardC2CReqToLocal;
+  popC2CRxReqQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// Snoop flow: local HN -> this C2CG -> C2C -> peer C2CG -> remote RN
+////////////////////////////////////////////////////////////////////////////
+
+// Snoop from local HN targeting remote cacher
+transition(I, OutSnp_Forward, SNP_WAIT_RESP) {
+  allocateSnpTBE;
+  recordSnpIDs_fromSnp;
+  forwardSnpToC2CTx;
+  popSnpInQueue;
+}
+
+// Snoop response from remote (via C2C RSP) -> forward to local HN
+transition(SNP_WAIT_RESP, RspIn_SnpResp, I) {
+  forwardSnpRspToC2C;
+  deallocateSnpTBE;
+  popC2CRxRspQueue;
+}
+
+// Snoop response data from remote (via C2C DAT) -> forward to local HN
+transition(SNP_WAIT_RESP, DatIn_SnpRespData, I) {
+  forwardSnpRspDatToC2C;
+  deallocateSnpTBE;
+  popC2CRxDatQueue;
+}
+
+// Inbound snoop from remote (via C2C SNP) -> stateless broadcast to local
+transition(I, InSnp_Deliver) {
+  forwardC2CSnpToLocal;
+  popC2CRxSnpQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// Retry handling
+////////////////////////////////////////////////////////////////////////////
+
+transition({I, REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
+            WR_WAIT_COMP, WAIT_COMPACK, SNP_WAIT_RESP,
+            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK},
+           SendRetryAck) {
+  sendRetryAck;
+  popRetryTriggerQueue;
+}
+
+transition({I, REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
+            WR_WAIT_COMP, WAIT_COMPACK, SNP_WAIT_RESP,
+            WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK},
+           SendPCrdGrant) {
+  sendPCrdGrant;
+  popRetryTriggerQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// Stall transitions for busy addresses
+////////////////////////////////////////////////////////////////////////////
+
+transition({REQ_SENT, REQ_FWD, REQ_RETRY_WAIT, WR_WAIT_DBID,
+            WR_WAIT_COMP, WAIT_COMPACK, WR_FWD_WAIT_DBID,
+            WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK},
+           {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
+            OutReq_ReadNoSnp, OutReq_ReadNotSharedDirty,
+            OutReq_CleanUnique, OutReq_Evict,
+            OutReq_WriteUniqueFull, OutReq_WriteUniquePtl,
+            OutReq_WriteBackFull, OutReq_WriteCleanFull,
+            OutReq_WriteEvictFull, OutReq_WriteNoSnpFull,
+            OutReq_WriteNoSnpPtl}) {
+  stallRequestQueue;
+}

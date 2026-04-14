@@ -287,6 +287,7 @@ enumeration(MachineType, desc="...", default="MachineType_NULL") {
     Cache,       desc="Generic coherent cache controller";
     Memory,      desc="Memory controller interface";
     MiscNode,    desc="CHI protocol Misc Node";
+    CHI_C2C,     desc="CHI C2C Gateway";
     NULL,        desc="null mach type";
 }
 
