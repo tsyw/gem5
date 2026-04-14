@@ -132,11 +132,19 @@ in_port(c2cRxSnpInPort, CHIRequestMsg, c2cRxSnp, rank=7) {
 }
 
 // Rank 6: NoC Snoop (from local HN for remote targets)
+// Credit check: outbound SNP requires C2C SNP credit (Phase 3)
 in_port(snpInPort, CHIRequestMsg, snpIn, rank=6) {
   if (snpInPort.isReady(clockEdge())) {
     printResources();
     peek(snpInPort, CHIRequestMsg) {
-      trigger(Event:OutSnp_Forward, in_msg.addr, snpTBEs[in_msg.addr]);
+      if (creditMgr.hasSnpCredit() == false) {
+        creditMgr.recordStall(1);  // CLS_SNP=1
+        snpInPort.recycle(clockEdge(),
+                          cyclesToTicks(stall_recycle_lat));
+      } else {
+        trigger(Event:OutSnp_Forward, in_msg.addr,
+                snpTBEs[in_msg.addr]);
+      }
     }
   }
 }
@@ -162,11 +170,21 @@ in_port(triggerInPort, TriggerMsg, triggerQueue, rank=4) {
 }
 
 // Rank 3: Requests with TBE allocated (reqRdy)
+// Credit check: outbound REQ requires C2C REQ credit (Phase 3)
 in_port(reqRdyInPort, CHIRequestMsg, reqRdy, rank=3) {
   if (reqRdyInPort.isReady(clockEdge())) {
     printResources();
     peek(reqRdyInPort, CHIRequestMsg) {
-      trigger(reqToEvent(in_msg.type), in_msg.addr, TBEs[in_msg.addr]);
+      // Check C2C REQ credit before forwarding outbound request
+      if (creditMgr.hasReqCredit(0) == false) {
+        // No REQ credit: stall and retry next cycle
+        creditMgr.recordStall(0);  // CLS_REQ=0
+        reqRdyInPort.recycle(clockEdge(),
+                             cyclesToTicks(stall_recycle_lat));
+      } else {
+        trigger(reqToEvent(in_msg.type), in_msg.addr,
+                TBEs[in_msg.addr]);
+      }
     }
   }
 }

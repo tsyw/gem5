@@ -27,6 +27,52 @@
  */
 
 // CHI C2C Gateway action definitions
+// Phase 3: Credit-based flow control
+
+////////////////////////////////////////////////////////////////////////////
+// Credit management actions
+////////////////////////////////////////////////////////////////////////////
+
+action(consumeReqCredit, "crdReq",
+       desc="Consume one REQ credit for outbound request") {
+  assert(is_valid(tbe));
+  creditMgr.consumeReqCredit(tbe.resPlane);
+}
+
+action(consumeRspCredit, "crdRsp",
+       desc="Consume one RSP credit for outbound response") {
+  creditMgr.consumeRspCredit();
+}
+
+action(consumeSnpCredit, "crdSnp",
+       desc="Consume one SNP credit for outbound snoop") {
+  creditMgr.consumeSnpCredit();
+}
+
+action(consumeDatCredit, "crdDat",
+       desc="Consume one DAT credit for outbound data") {
+  creditMgr.consumeDatCredit();
+}
+
+action(returnReqCredit, "retReq",
+       desc="Return one REQ credit on inbound request dequeue") {
+  creditMgr.returnReqCredit();
+}
+
+action(returnRspCredit, "retRsp",
+       desc="Return one RSP credit on inbound response dequeue") {
+  creditMgr.returnRspCredit();
+}
+
+action(returnSnpCredit, "retSnp",
+       desc="Return one SNP credit on inbound snoop dequeue") {
+  creditMgr.returnSnpCredit();
+}
+
+action(returnDatCredit, "retDat",
+       desc="Return one DAT credit on inbound data dequeue") {
+  creditMgr.returnDatCredit();
+}
 
 ////////////////////////////////////////////////////////////////////////////
 // TBE management actions
@@ -82,6 +128,8 @@ action(allocateTBE, "atbe", desc="Allocate TBE for a transaction") {
   tbe.isDVM := false;
   tbe.isDataless := false;
   tbe.isAtomic := false;
+  tbe.resPlane := 0;
+  tbe.usedSharedCredit := false;
   tbe.rxtxBytes := 0;
 }
 
@@ -121,6 +169,8 @@ action(allocateSnpTBE, "asnptbe", desc="Allocate snoop TBE") {
   tbe.expectingData := false;
   tbe.expectingComp := false;
   tbe.pendingSnpResps := 0;
+  tbe.resPlane := 0;
+  tbe.usedSharedCredit := false;
   tbe.rxtxBytes := 0;
 }
 

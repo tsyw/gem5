@@ -28,7 +28,7 @@
 
 // CHI C2C Gateway Controller
 // Implements the protocol-layer gateway per IHI0098A (AMBA CHI C2C)
-// Phase 2: Protocol flows - separated comp/data, atomics, error handling
+// Phase 3: Credit-based flow control for outbound/inbound messages
 
 machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
@@ -44,6 +44,16 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
   // Data channel width
   int data_channel_size;
+
+  // Credit parameters (Phase 3: pre-configured, per Decision D8)
+  int num_resource_planes := 1;
+  int init_req_credits_per_rp := 16;
+  int init_req_credits_shared := 32;
+  int init_rsp_credits := 32;
+  int init_snp_credits := 16;
+  int init_dat_credits := 32;
+  int init_dat_credits_shared := 16;
+  int init_misc_credits := 8;
 
   // NoC-side message buffers (connected to Ruby network)
   MessageBuffer * reqOut,  network="To", virtual_network="0",
@@ -231,6 +241,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     bool expectingComp,         desc="Waiting for completion";
     int pendingSnpResps,        desc="Outstanding snoop responses";
     bool retryPending,          desc="HN sent RetryAck";
+    int resPlane,               desc="Resource Plane assignment";
+    bool usedSharedCredit,      desc="Used shared credit pool";
     Tick allocTime,             desc="Cycle when allocated";
     DataBlock dataBlk,          desc="Transaction data buffer";
     WriteMask dataBlkValid,     desc="Valid bytes in data buffer";
@@ -262,6 +274,26 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
       constructor="m_number_of_TBEs";
   TBEStorage storTBEs,
       constructor='this, m_number_of_TBEs, "TBEs"';
+
+  // C2C Credit Manager (Phase 3)
+  structure(C2CCreditManager, external="yes") {
+    bool hasReqCredit(int rp);
+    bool hasRspCredit();
+    bool hasSnpCredit();
+    bool hasDatCredit();
+    bool consumeReqCredit(int rp);
+    void consumeRspCredit();
+    void consumeSnpCredit();
+    bool consumeDatCredit();
+    void returnReqCredit();
+    void returnRspCredit();
+    void returnSnpCredit();
+    void returnDatCredit();
+    void recordStall(int cls);
+  }
+
+  C2CCreditManager creditMgr,
+      constructor='this, m_num_resource_planes, m_init_req_credits_per_rp, m_init_req_credits_shared, m_init_rsp_credits, m_init_snp_credits, m_init_dat_credits, m_init_dat_credits_shared, m_init_misc_credits';
 
   // Separate TBE table for snoop forwarding (deadlock avoidance)
   TBETable snpTBEs, template="<CHI_C2C_TBE>",
