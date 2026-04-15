@@ -28,7 +28,7 @@
 
 // CHI C2C Gateway Controller
 // Implements the protocol-layer gateway per IHI0098A (AMBA CHI C2C)
-// Phase 4: DVM support (DN-C2C role)
+// Phase 5: Interface management (state guards, instant-init)
 
 machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
@@ -45,6 +45,12 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
   // DVM TxnID offset to avoid collision with remote MN address space
   int dvm_txnid_offset := 65536;
+
+  // Feature support parameters (Phase 5: interface management)
+  bool timed_init := "false";
+  bool dvm_support := "true";
+  bool snoop_support := "true";
+  bool atomic_support := "true";
 
   // Data channel width
   int data_channel_size;
@@ -95,6 +101,40 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   MessageBuffer * reqRdy;
 
 {
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Interface-level state enums (Phase 5)
+  ////////////////////////////////////////////////////////////////////////////
+
+  enumeration(InterfaceState, desc="C2C interface state") {
+    IF_STOP,        desc="Interface stopped, no traffic permitted";
+    IF_ACTIVATE,    desc="Activation handshake in progress";
+    IF_RUN,         desc="Interface fully active";
+    IF_DEACTIVATE,  desc="Deactivation in progress, drain only";
+  }
+
+  enumeration(CoherencyState, desc="Coherency domain state") {
+    COH_DISABLED,   desc="Not participating in coherency";
+    COH_CONNECT,    desc="Coherency connection handshake in progress";
+    COH_ENABLED,    desc="Fully coherent, protocol traffic allowed";
+    COH_DISCONNECT, desc="Disconnection in progress, drain outstanding";
+  }
+
+  enumeration(DVMDomainState, desc="DVM domain state") {
+    DVM_DISABLED,   desc="DVM domain disconnected";
+    DVM_CONNECT,    desc="DVM connection handshake in progress";
+    DVM_ENABLED,    desc="DVM domain active";
+    DVM_DISCONNECT, desc="DVM disconnection in progress";
+  }
+
+  // Controller-level guard variables (instant-init defaults per D8)
+  // dvmState default matches dvm_support param default (true)
+  InterfaceState interfaceState,
+      default="CHI_C2C_InterfaceState_IF_RUN";
+  CoherencyState cohState,
+      default="CHI_C2C_CoherencyState_COH_ENABLED";
+  DVMDomainState dvmState,
+      default="CHI_C2C_DVMDomainState_DVM_ENABLED";
 
   ////////////////////////////////////////////////////////////////////////////
   // States

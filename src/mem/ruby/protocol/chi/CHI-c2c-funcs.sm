@@ -100,6 +100,17 @@ int functionalWrite(Addr addr, Packet *pkt) {
 // Helper functions
 ////////////////////////////////////////////////////////////////////////////
 
+// Interface state guard checks (Phase 5)
+bool coherencyEnabled() {
+  return (interfaceState == InterfaceState:IF_RUN) &&
+         (cohState == CoherencyState:COH_ENABLED);
+}
+
+bool dvmEnabled() {
+  return coherencyEnabled() &&
+         (dvmState == DVMDomainState:DVM_ENABLED);
+}
+
 void printResources() {
   DPRINTF(RubySlicc, "Resources(avail/max): TBEs=%d/%d snpTBEs=%d/%d dvmTBEs=%d/%d\n",
                 storTBEs.size(), storTBEs.capacity(),

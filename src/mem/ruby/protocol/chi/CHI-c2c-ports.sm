@@ -130,9 +130,14 @@ bool datInPort_stall() {
 in_port(c2cRxSnpInPort, CHIRequestMsg, c2cRxSnp, rank=7) {
   if (c2cRxSnpInPort.isReady(clockEdge())) {
     printResources();
-    peek(c2cRxSnpInPort, CHIRequestMsg) {
-      // Phase 1: stateless snoop forwarding (no TBE needed)
-      trigger(Event:InSnp_Deliver, in_msg.addr, TBEs[in_msg.addr]);
+    if (coherencyEnabled() == false) {
+      c2cRxSnpInPort.recycle(clockEdge(),
+                              cyclesToTicks(stall_recycle_lat));
+    } else {
+      peek(c2cRxSnpInPort, CHIRequestMsg) {
+        // Phase 1: stateless snoop forwarding (no TBE needed)
+        trigger(Event:InSnp_Deliver, in_msg.addr, TBEs[in_msg.addr]);
+      }
     }
   }
 }
@@ -145,8 +150,10 @@ in_port(snpInPort, CHIRequestMsg, snpIn, rank=6) {
     printResources();
     peek(snpInPort, CHIRequestMsg) {
       if (isDvmSnoop(in_msg.type)) {
-        // DVM snoop from local MN
-        if (isDvmP1(in_msg.type)) {
+        if (dvmEnabled() == false) {
+          snpInPort.recycle(clockEdge(),
+                            cyclesToTicks(stall_recycle_lat));
+        } else if (isDvmP1(in_msg.type)) {
           // P1: allocate dvmTBE, no C2C credit needed yet
           if (storDvmTBEs.areNSlotsAvailable(1) == false) {
             snpInPort.recycle(clockEdge(),
@@ -167,6 +174,9 @@ in_port(snpInPort, CHIRequestMsg, snpIn, rank=6) {
                     dvmTBEs[in_msg.addr]);
           }
         }
+      } else if (coherencyEnabled() == false) {
+        snpInPort.recycle(clockEdge(),
+                          cyclesToTicks(stall_recycle_lat));
       } else if (creditMgr.hasSnpCredit() == false) {
         creditMgr.recordStall(1);  // CLS_SNP=1
         snpInPort.recycle(clockEdge(),
@@ -204,16 +214,21 @@ in_port(triggerInPort, TriggerMsg, triggerQueue, rank=4) {
 in_port(reqRdyInPort, CHIRequestMsg, reqRdy, rank=3) {
   if (reqRdyInPort.isReady(clockEdge())) {
     printResources();
-    peek(reqRdyInPort, CHIRequestMsg) {
-      // Check C2C REQ credit before forwarding outbound request
-      if (creditMgr.hasReqCredit(0) == false) {
-        // No REQ credit: stall and retry next cycle
-        creditMgr.recordStall(0);  // CLS_REQ=0
-        reqRdyInPort.recycle(clockEdge(),
-                             cyclesToTicks(stall_recycle_lat));
-      } else {
-        trigger(reqToEvent(in_msg.type), in_msg.addr,
-                TBEs[in_msg.addr]);
+    if (coherencyEnabled() == false) {
+      reqRdyInPort.recycle(clockEdge(),
+                           cyclesToTicks(stall_recycle_lat));
+    } else {
+      peek(reqRdyInPort, CHIRequestMsg) {
+        // Check C2C REQ credit before forwarding outbound request
+        if (creditMgr.hasReqCredit(0) == false) {
+          // No REQ credit: stall and retry next cycle
+          creditMgr.recordStall(0);  // CLS_REQ=0
+          reqRdyInPort.recycle(clockEdge(),
+                               cyclesToTicks(stall_recycle_lat));
+        } else {
+          trigger(reqToEvent(in_msg.type), in_msg.addr,
+                  TBEs[in_msg.addr]);
+        }
       }
     }
   }
@@ -223,26 +238,32 @@ in_port(reqRdyInPort, CHIRequestMsg, reqRdy, rank=3) {
 in_port(c2cRxReqInPort, CHIRequestMsg, c2cRxReq, rank=2) {
   if (c2cRxReqInPort.isReady(clockEdge())) {
     printResources();
-    peek(c2cRxReqInPort, CHIRequestMsg) {
-      if (storTBEs.areNSlotsAvailable(1)) {
-        storTBEs.incrementReserved();
-        // Map C2C request events
-        if (isReadRequest(in_msg.type)) {
-          trigger(Event:InReq_Read, in_msg.addr, TBEs[in_msg.addr]);
-        } else if (isWriteRequest(in_msg.type) ||
-                   isDvmRequest(in_msg.type)) {
-          // DvmOp follows same write-like flow (req->DBID->data->Comp)
-          trigger(Event:InReq_Write, in_msg.addr, TBEs[in_msg.addr]);
-        } else if (isAtomicRequest(in_msg.type)) {
-          trigger(Event:InReq_Atomic, in_msg.addr, TBEs[in_msg.addr]);
-        } else if (in_msg.type == CHIRequestType:Evict) {
-          trigger(Event:InReq_Evict, in_msg.addr, TBEs[in_msg.addr]);
+    if (coherencyEnabled() == false) {
+      c2cRxReqInPort.recycle(clockEdge(),
+                              cyclesToTicks(stall_recycle_lat));
+    } else {
+      peek(c2cRxReqInPort, CHIRequestMsg) {
+        if (storTBEs.areNSlotsAvailable(1)) {
+          storTBEs.incrementReserved();
+          // Map C2C request events
+          if (isReadRequest(in_msg.type)) {
+            trigger(Event:InReq_Read, in_msg.addr, TBEs[in_msg.addr]);
+          } else if (isWriteRequest(in_msg.type) ||
+                     isDvmRequest(in_msg.type)) {
+            trigger(Event:InReq_Write, in_msg.addr, TBEs[in_msg.addr]);
+          } else if (isAtomicRequest(in_msg.type)) {
+            trigger(Event:InReq_Atomic, in_msg.addr, TBEs[in_msg.addr]);
+          } else if (in_msg.type == CHIRequestType:Evict) {
+            trigger(Event:InReq_Evict, in_msg.addr, TBEs[in_msg.addr]);
+          } else {
+            trigger(Event:InReq_Dataless, in_msg.addr,
+                    TBEs[in_msg.addr]);
+          }
         } else {
-          trigger(Event:InReq_Dataless, in_msg.addr, TBEs[in_msg.addr]);
+          // Cannot send RetryAck across C2C; stall
+          c2cRxReqInPort.recycle(clockEdge(),
+                                  cyclesToTicks(stall_recycle_lat));
         }
-      } else {
-        // Cannot send RetryAck across C2C; stall
-        c2cRxReqInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
       }
     }
   }
@@ -252,12 +273,17 @@ in_port(c2cRxReqInPort, CHIRequestMsg, c2cRxReq, rank=2) {
 in_port(reqInPort, CHIRequestMsg, reqIn, rank=1) {
   if (reqInPort.isReady(clockEdge())) {
     printResources();
-    peek(reqInPort, CHIRequestMsg) {
-      if (in_msg.allowRetry) {
-        trigger(Event:CheckAllocTBE, in_msg.addr, TBEs[in_msg.addr]);
-      } else {
-        trigger(Event:CheckAllocTBE_WithCredit,
-                in_msg.addr, TBEs[in_msg.addr]);
+    if (coherencyEnabled() == false) {
+      reqInPort.recycle(clockEdge(),
+                        cyclesToTicks(stall_recycle_lat));
+    } else {
+      peek(reqInPort, CHIRequestMsg) {
+        if (in_msg.allowRetry) {
+          trigger(Event:CheckAllocTBE, in_msg.addr, TBEs[in_msg.addr]);
+        } else {
+          trigger(Event:CheckAllocTBE_WithCredit,
+                  in_msg.addr, TBEs[in_msg.addr]);
+        }
       }
     }
   }
