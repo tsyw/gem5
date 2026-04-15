@@ -118,19 +118,7 @@ action(allocateTBE, "atbe", desc="Allocate TBE for a transaction") {
   tbe.storSlot := storTBEs.addEntryToNewSlot();
   tbe.addr := address;
   tbe.allocTime := curTick();
-  tbe.retryPending := false;
-  tbe.expectingData := false;
-  tbe.expectingComp := false;
-  tbe.pendingSnpResps := 0;
-  tbe.isRead := false;
-  tbe.isWrite := false;
-  tbe.isSnoop := false;
-  tbe.isDVM := false;
-  tbe.isDataless := false;
-  tbe.isAtomic := false;
-  tbe.resPlane := 0;
-  tbe.usedSharedCredit := false;
-  tbe.rxtxBytes := 0;
+  clearTBEDefaults(tbe);
 }
 
 action(deallocateTBE, "dtbe", desc="Deallocate TBE") {
@@ -159,19 +147,8 @@ action(allocateSnpTBE, "asnptbe", desc="Allocate snoop TBE") {
   tbe.storSlot := storSnpTBEs.addEntryToNewSlot();
   tbe.addr := address;
   tbe.allocTime := curTick();
+  clearTBEDefaults(tbe);
   tbe.isSnoop := true;
-  tbe.isRead := false;
-  tbe.isWrite := false;
-  tbe.isDVM := false;
-  tbe.isDataless := false;
-  tbe.isAtomic := false;
-  tbe.retryPending := false;
-  tbe.expectingData := false;
-  tbe.expectingComp := false;
-  tbe.pendingSnpResps := 0;
-  tbe.resPlane := 0;
-  tbe.usedSharedCredit := false;
-  tbe.rxtxBytes := 0;
 }
 
 action(deallocateSnpTBE, "dsnptbe", desc="Deallocate snoop TBE") {
@@ -521,4 +498,105 @@ action(stallRequestQueue, "str", desc="Stall request queue") {
 
 action(wakeUpStalled, "wa", desc="Wake up stalled requests") {
   wakeUpAllBuffers(address);
+}
+
+////////////////////////////////////////////////////////////////////////////
+// DVM actions (Phase 4: DN-C2C role)
+////////////////////////////////////////////////////////////////////////////
+
+action(allocateDvmTBE, "advmtbe", desc="Allocate DVM TBE") {
+  storDvmTBEs.decrementReserved();
+  dvmTBEs.allocate(address);
+  set_tbe(dvmTBEs[address]);
+  tbe.storSlot := storDvmTBEs.addEntryToNewSlot();
+  tbe.addr := address;
+  tbe.allocTime := curTick();
+  clearTBEDefaults(tbe);
+  tbe.isDVM := true;
+}
+
+action(recordDvmP1, "rdvmp1",
+       desc="Buffer DVM P1 info in TBE from snpIn") {
+  assert(is_valid(tbe));
+  peek(snpInPort, CHIRequestMsg) {
+    tbe.reqType := in_msg.type;
+    tbe.localSrcID := in_msg.requestor;  // the MN
+    tbe.localTxnID := in_msg.addr;       // MN's txnId (= addr field)
+  }
+}
+
+action(sendDvmReqToC2C, "sdvmreq",
+       desc="Reconstruct DvmOp and send to C2C REQ") {
+  assert(is_valid(tbe));
+  Addr remoteDvmAddr := intToAddress(
+      addressToInt(tbe.localTxnID) + dvm_txnid_offset);
+  tbe.remoteTxnID := remoteDvmAddr;
+  CHIRequestType dvmType := CHIRequestType:DvmOpNonSync;
+  if (isDvmSyncType(tbe.reqType)) {
+    dvmType := CHIRequestType:DvmOpSync;
+  }
+  enqueue(c2cTxReqOutPort, CHIRequestMsg, request_latency) {
+    out_msg.addr := remoteDvmAddr;
+    out_msg.accAddr := remoteDvmAddr;
+    out_msg.accSize := blockSize;
+    out_msg.type := dvmType;
+    out_msg.requestor := machineID;
+    out_msg.txnId := remoteDvmAddr;
+    out_msg.usesTxnId := true;
+    out_msg.isC2C := true;
+    out_msg.origSrcID := machineID;
+    out_msg.origTxnId := tbe.localTxnID;
+    out_msg.c2cSrcGateway := machineID;
+    out_msg.allowRetry := false;
+    out_msg.Destination.clear();
+    out_msg.Destination.add(
+        mapAddressToDownstreamMachine(remoteDvmAddr));
+  }
+}
+
+action(sendDvmDataToC2C, "sdvmdat",
+       desc="Send NCBWrData for DVM across C2C DAT") {
+  assert(is_valid(tbe));
+  enqueue(c2cTxDatOutPort, CHIDataMsg, data_latency) {
+    out_msg.addr := tbe.remoteTxnID;
+    out_msg.type := CHIDataType:NCBWrData;
+    out_msg.responder := machineID;
+    out_msg.txnId := tbe.remoteTxnID;
+    out_msg.usesTxnId := true;
+    out_msg.isC2C := true;
+    out_msg.c2cSrcGateway := machineID;
+    out_msg.dataBlk := tbe.dataBlk;  // MN ignores data contents
+    out_msg.Destination.clear();
+    out_msg.Destination.add(tbe.peerC2CG);
+  }
+}
+
+action(recordDvmPeerFromRsp, "rdvmpeer",
+       desc="Record peer C2CG from C2C RX response") {
+  assert(is_valid(tbe));
+  peek(c2cRxRspInPort, CHIResponseMsg) {
+    tbe.peerC2CG := in_msg.c2cSrcGateway;
+  }
+}
+
+action(sendSnpRespIToMN, "ssnprsp",
+       desc="Send SnpResp_I to local MN") {
+  assert(is_valid(tbe));
+  enqueue(rspOutPort, CHIResponseMsg, response_latency) {
+    out_msg.addr := tbe.localTxnID;
+    out_msg.type := CHIResponseType:SnpResp_I;
+    out_msg.responder := machineID;
+    out_msg.txnId := tbe.localTxnID;
+    out_msg.usesTxnId := true;
+    out_msg.Destination.clear();
+    out_msg.Destination.add(tbe.localSrcID);  // the MN
+  }
+}
+
+action(deallocateDvmTBE, "ddvmtbe", desc="Deallocate DVM TBE") {
+  assert(is_valid(tbe));
+  storDvmTBEs.removeEntryFromSlot(tbe.storSlot);
+  dvmTBEs.deallocate(address);
+  unset_tbe();
+  // No retry-queue handling: DVM TBEs are separate from main pool
 }

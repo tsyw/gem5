@@ -63,6 +63,9 @@ in_port(c2cRxRspInPort, CHIResponseMsg, c2cRxRsp, rank=12,
     printResources();
     peek(c2cRxRspInPort, CHIResponseMsg) {
       TBE tbe := TBEs[in_msg.addr];
+      if (is_valid(tbe) == false) {
+        tbe := dvmTBEs[in_msg.addr];
+      }
       trigger(respToEvent(in_msg.type), in_msg.addr, tbe);
     }
   }
@@ -79,6 +82,9 @@ in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
     printResources();
     peek(c2cRxDatInPort, CHIDataMsg) {
       TBE tbe := TBEs[in_msg.addr];
+      if (is_valid(tbe) == false) {
+        tbe := dvmTBEs[in_msg.addr];
+      }
       trigger(dataToEvent(in_msg.type), in_msg.addr, tbe);
     }
   }
@@ -131,13 +137,37 @@ in_port(c2cRxSnpInPort, CHIRequestMsg, c2cRxSnp, rank=7) {
   }
 }
 
-// Rank 6: NoC Snoop (from local HN for remote targets)
+// Rank 6: NoC Snoop (from local HN for remote targets, or MN for DVM)
 // Credit check: outbound SNP requires C2C SNP credit (Phase 3)
+// DVM snoops: P1 needs dvmTBE slot, P2 needs REQ credit (Phase 4)
 in_port(snpInPort, CHIRequestMsg, snpIn, rank=6) {
   if (snpInPort.isReady(clockEdge())) {
     printResources();
     peek(snpInPort, CHIRequestMsg) {
-      if (creditMgr.hasSnpCredit() == false) {
+      if (isDvmSnoop(in_msg.type)) {
+        // DVM snoop from local MN
+        if (isDvmP1(in_msg.type)) {
+          // P1: allocate dvmTBE, no C2C credit needed yet
+          if (storDvmTBEs.areNSlotsAvailable(1) == false) {
+            snpInPort.recycle(clockEdge(),
+                              cyclesToTicks(stall_recycle_lat));
+          } else {
+            storDvmTBEs.incrementReserved();
+            trigger(Event:OutSnp_DvmP1, in_msg.addr,
+                    dvmTBEs[in_msg.addr]);
+          }
+        } else {
+          // P2: need REQ credit to send DvmOp across C2C
+          if (creditMgr.hasReqCredit(0) == false) {
+            creditMgr.recordStall(0);  // CLS_REQ=0
+            snpInPort.recycle(clockEdge(),
+                              cyclesToTicks(stall_recycle_lat));
+          } else {
+            trigger(Event:OutSnp_DvmP2, in_msg.addr,
+                    dvmTBEs[in_msg.addr]);
+          }
+        }
+      } else if (creditMgr.hasSnpCredit() == false) {
         creditMgr.recordStall(1);  // CLS_SNP=1
         snpInPort.recycle(clockEdge(),
                           cyclesToTicks(stall_recycle_lat));
@@ -199,7 +229,9 @@ in_port(c2cRxReqInPort, CHIRequestMsg, c2cRxReq, rank=2) {
         // Map C2C request events
         if (isReadRequest(in_msg.type)) {
           trigger(Event:InReq_Read, in_msg.addr, TBEs[in_msg.addr]);
-        } else if (isWriteRequest(in_msg.type)) {
+        } else if (isWriteRequest(in_msg.type) ||
+                   isDvmRequest(in_msg.type)) {
+          // DvmOp follows same write-like flow (req->DBID->data->Comp)
           trigger(Event:InReq_Write, in_msg.addr, TBEs[in_msg.addr]);
         } else if (isAtomicRequest(in_msg.type)) {
           trigger(Event:InReq_Atomic, in_msg.addr, TBEs[in_msg.addr]);

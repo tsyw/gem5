@@ -28,7 +28,7 @@
 
 // CHI C2C Gateway Controller
 // Implements the protocol-layer gateway per IHI0098A (AMBA CHI C2C)
-// Phase 3: Credit-based flow control for outbound/inbound messages
+// Phase 4: DVM support (DN-C2C role)
 
 machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
@@ -41,6 +41,10 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
   // TBE sizing
   int number_of_snoop_TBEs;
+  int number_of_dvm_TBEs := 4;
+
+  // DVM TxnID offset to avoid collision with remote MN address space
+  int dvm_txnid_offset := 65536;
 
   // Data channel width
   int data_channel_size;
@@ -148,6 +152,14 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     // Snoop path
     SNP_WAIT_RESP,     AccessPermission:Busy,
         desc="Snoop forwarded across C2C, awaiting response";
+
+    // DVM originator path (local MN -> C2CG -> remote MN)
+    DVM_WAIT_P2,       AccessPermission:Busy,
+        desc="DVM originator: received P1, waiting for P2";
+    DVM_WAIT_DBID,     AccessPermission:Busy,
+        desc="DVM originator: DvmOp sent, waiting for DBIDResp";
+    DVM_WAIT_COMP,     AccessPermission:Busy,
+        desc="DVM originator: NCBWrData sent, waiting for Comp";
   }
 
 
@@ -187,6 +199,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
     // Snoop events
     OutSnp_Forward,              desc="Snoop from local HN to forward";
+    OutSnp_DvmP1,                desc="SnpDvmOp_P1 from local MN";
+    OutSnp_DvmP2,                desc="SnpDvmOp_P2 from local MN";
     InSnp_Deliver,               desc="Inbound snoop to deliver locally";
 
     // Response events
@@ -300,6 +314,12 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
       constructor="m_number_of_snoop_TBEs";
   TBEStorage storSnpTBEs,
       constructor='this, m_number_of_snoop_TBEs, "snpTBEs"';
+
+  // Separate TBE table for DVM originator (addr = txnId collision avoidance)
+  TBETable dvmTBEs, template="<CHI_C2C_TBE>",
+      constructor="m_number_of_dvm_TBEs";
+  TBEStorage storDvmTBEs,
+      constructor='this, m_number_of_dvm_TBEs, "dvmTBEs"';
 
   // Retry queue
   structure(RetryQueueEntry) {

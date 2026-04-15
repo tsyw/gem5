@@ -47,9 +47,13 @@ MachineID mapAddressToDownstreamMachine(Addr addr);
 State getState(TBE tbe, Addr addr) {
   if (is_valid(tbe)) {
     return tbe.state;
-  } else {
-    return State:I;
   }
+  // Check DVM TBE table (uses different address space)
+  TBE dvmTbe := dvmTBEs[addr];
+  if (is_valid(dvmTbe)) {
+    return dvmTbe.state;
+  }
+  return State:I;
 }
 
 void setState(TBE tbe, Addr addr, State state) {
@@ -63,6 +67,10 @@ AccessPermission getAccessPermission(Addr addr) {
   if (is_valid(tbe)) {
     return CHI_C2C_State_to_permission(tbe.state);
   }
+  TBE dvmTbe := dvmTBEs[addr];
+  if (is_valid(dvmTbe)) {
+    return CHI_C2C_State_to_permission(dvmTbe.state);
+  }
   return AccessPermission:NotPresent;
 }
 
@@ -70,11 +78,11 @@ void setAccessPermission(Addr addr, State state) {
 }
 
 void functionalRead(Addr addr, Packet *pkt, WriteMask &mask) {
-  // C2CG does not hold cached data; nothing to provide
   TBE tbe := TBEs[addr];
   if (is_valid(tbe)) {
     testAndReadMask(addr, tbe.dataBlk, mask, pkt);
   }
+  // DVM TBEs carry no coherent data; skip dvmTBEs probe
 }
 
 int functionalWrite(Addr addr, Packet *pkt) {
@@ -84,6 +92,7 @@ int functionalWrite(Addr addr, Packet *pkt) {
     num_functional_writes := num_functional_writes +
       testAndWrite(addr, tbe.dataBlk, pkt);
   }
+  // DVM TBEs carry no coherent data; skip dvmTBEs probe
   return num_functional_writes;
 }
 
@@ -92,9 +101,10 @@ int functionalWrite(Addr addr, Packet *pkt) {
 ////////////////////////////////////////////////////////////////////////////
 
 void printResources() {
-  DPRINTF(RubySlicc, "Resources(avail/max): TBEs=%d/%d snpTBEs=%d/%d\n",
+  DPRINTF(RubySlicc, "Resources(avail/max): TBEs=%d/%d snpTBEs=%d/%d dvmTBEs=%d/%d\n",
                 storTBEs.size(), storTBEs.capacity(),
-                storSnpTBEs.size(), storSnpTBEs.capacity());
+                storSnpTBEs.size(), storSnpTBEs.capacity(),
+                storDvmTBEs.size(), storDvmTBEs.capacity());
 }
 
 // Event mapping: CHI request type -> C2CG event
@@ -289,4 +299,62 @@ bool isAtomicRequest(CHIRequestType type) {
     return true;
   }
   return false;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// DVM helper functions (Phase 4)
+////////////////////////////////////////////////////////////////////////////
+
+bool isDvmP1(CHIRequestType type) {
+  if ((type == CHIRequestType:SnpDvmOpSync_P1) ||
+      (type == CHIRequestType:SnpDvmOpNonSync_P1)) {
+    return true;
+  }
+  return false;
+}
+
+bool isDvmP2(CHIRequestType type) {
+  if ((type == CHIRequestType:SnpDvmOpSync_P2) ||
+      (type == CHIRequestType:SnpDvmOpNonSync_P2)) {
+    return true;
+  }
+  return false;
+}
+
+bool isDvmSnoop(CHIRequestType type) {
+  return isDvmP1(type) || isDvmP2(type);
+}
+
+bool isDvmSyncType(CHIRequestType type) {
+  if ((type == CHIRequestType:SnpDvmOpSync_P1) ||
+      (type == CHIRequestType:SnpDvmOpSync_P2) ||
+      (type == CHIRequestType:DvmOpSync)) {
+    return true;
+  }
+  return false;
+}
+
+bool isDvmRequest(CHIRequestType type) {
+  if ((type == CHIRequestType:DvmOpNonSync) ||
+      (type == CHIRequestType:DvmOpSync)) {
+    return true;
+  }
+  return false;
+}
+
+// Shared TBE field initialization (avoids triplicated defaults)
+void clearTBEDefaults(TBE tbe) {
+  tbe.isRead := false;
+  tbe.isWrite := false;
+  tbe.isSnoop := false;
+  tbe.isDVM := false;
+  tbe.isDataless := false;
+  tbe.isAtomic := false;
+  tbe.retryPending := false;
+  tbe.expectingData := false;
+  tbe.expectingComp := false;
+  tbe.resPlane := 0;
+  tbe.usedSharedCredit := false;
+  tbe.rxtxBytes := 0;
+  tbe.pendingSnpResps := 0;
 }

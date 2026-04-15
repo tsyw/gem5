@@ -48,7 +48,8 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
-            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT},
+            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP},
            CheckAllocTBE) {
   checkAllocateTBE;
 }
@@ -61,7 +62,8 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
-            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT},
+            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP},
            CheckAllocTBE_WithCredit) {
   checkAllocateTBE_withCredit;
 }
@@ -532,6 +534,58 @@ transition(I, InSnp_Deliver) {
 }
 
 ////////////////////////////////////////////////////////////////////////////
+// DVM originator flow (Phase 4): local MN -> C2CG -> C2C -> remote MN
+// MN sends SnpDvmOp P1/P2 to C2CG; C2CG reconstructs DvmOp and
+// forwards using WritePull (req -> DBID -> NCBWrData -> Comp).
+// Consume: REQ credit on DvmOp send, DAT credit on NCBWrData send
+// Return: RSP credit on C2C RX dequeue
+////////////////////////////////////////////////////////////////////////////
+
+// P1 from local MN -> buffer in dvmTBE
+transition(I, OutSnp_DvmP1, DVM_WAIT_P2) {
+  allocateDvmTBE;
+  recordDvmP1;
+  popSnpInQueue;
+}
+
+// P2 from local MN -> reconstruct and send DvmOp across C2C
+transition(DVM_WAIT_P2, OutSnp_DvmP2, DVM_WAIT_DBID) {
+  consumeReqCredit;
+  sendDvmReqToC2C;
+  popSnpInQueue;
+}
+
+// DBIDResp from remote -> send NCBWrData
+transition(DVM_WAIT_DBID, RspIn_DBIDResp, DVM_WAIT_COMP) {
+  recordDvmPeerFromRsp;
+  consumeDatCredit;
+  sendDvmDataToC2C;
+  returnRspCredit;
+  popC2CRxRspQueue;
+}
+
+// CompDBIDResp from remote -> send data + complete immediately
+transition(DVM_WAIT_DBID, RspIn_CompDBIDResp, I) {
+  recordDvmPeerFromRsp;
+  consumeDatCredit;
+  sendDvmDataToC2C;
+  sendSnpRespIToMN;
+  returnRspCredit;
+  deallocateDvmTBE;
+  wakeUpStalled;
+  popC2CRxRspQueue;
+}
+
+// Comp from remote -> complete
+transition(DVM_WAIT_COMP, RspIn_Comp, I) {
+  sendSnpRespIToMN;
+  returnRspCredit;
+  deallocateDvmTBE;
+  wakeUpStalled;
+  popC2CRxRspQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
 // Retry/credit trigger queue (valid in all states)
 ////////////////////////////////////////////////////////////////////////////
 
@@ -543,7 +597,8 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
-            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT},
+            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP},
            SendRetryAck) {
   sendRetryAck;
   popRetryTriggerQueue;
@@ -557,7 +612,8 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
-            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT},
+            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP},
            SendPCrdGrant) {
   sendPCrdGrant;
   popRetryTriggerQueue;
@@ -574,7 +630,8 @@ transition({REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
-            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT},
+            ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP},
            {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
             OutReq_ReadNoSnp, OutReq_ReadNotSharedDirty,
             OutReq_CleanUnique, OutReq_Evict,
