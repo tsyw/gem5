@@ -59,6 +59,9 @@ enumeration(CHIRequestType, desc="") {
   ReadUnique;
   ReadOnce;
   CleanUnique;
+  CleanShared;
+  CleanInvalid;
+  MakeInvalid;
   MakeReadUnique;
 
   Evict;

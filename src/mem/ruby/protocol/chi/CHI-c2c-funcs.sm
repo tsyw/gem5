@@ -118,6 +118,17 @@ void printResources() {
                 storDvmTBEs.size(), storDvmTBEs.capacity());
 }
 
+// Determine if a request type is dataless (no CompAck: Evict-like)
+bool isEvictLikeRequest(CHIRequestType type) {
+  if ((type == CHIRequestType:Evict) ||
+      (type == CHIRequestType:CleanShared) ||
+      (type == CHIRequestType:CleanInvalid) ||
+      (type == CHIRequestType:MakeInvalid)) {
+    return true;
+  }
+  return false;
+}
+
 // Event mapping: CHI request type -> C2CG event
 Event reqToEvent(CHIRequestType type) {
   if (type == CHIRequestType:ReadShared) {
@@ -146,7 +157,7 @@ Event reqToEvent(CHIRequestType type) {
     return Event:OutReq_WriteNoSnpFull;
   } else if (type == CHIRequestType:WriteNoSnpPtl) {
     return Event:OutReq_WriteNoSnpPtl;
-  } else if (type == CHIRequestType:Evict) {
+  } else if (isEvictLikeRequest(type)) {
     return Event:OutReq_Evict;
   } else if (type == CHIRequestType:AtomicReturn) {
     return Event:OutReq_AtomicLoad;
@@ -301,7 +312,7 @@ bool isWriteRequest(CHIRequestType type) {
 // Determine if a request type is dataless
 bool isDatalessRequest(CHIRequestType type) {
   if ((type == CHIRequestType:CleanUnique) ||
-      (type == CHIRequestType:Evict)) {
+      isEvictLikeRequest(type)) {
     return true;
   }
   return false;
