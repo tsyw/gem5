@@ -27,7 +27,7 @@
  */
 
 // CHI C2C Gateway transition table
-// Phase 3: Credit-based flow control
+// Phase 6: WritePush combining
 //
 // Credit rules (Decision D5):
 //   Consume: when message is enqueued to C2C TX buffer
@@ -49,7 +49,9 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
             ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
-            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP},
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
+            WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
            CheckAllocTBE) {
   checkAllocateTBE;
 }
@@ -63,7 +65,9 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
             ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
-            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP},
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
+            WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
            CheckAllocTBE_WithCredit) {
   checkAllocateTBE_withCredit;
 }
@@ -150,10 +154,7 @@ transition(WAIT_COMPACK, RspIn_CompAck, I) {
 // Return: RSP credit on C2C RX dequeue
 ////////////////////////////////////////////////////////////////////////////
 
-transition(I, {OutReq_WriteUniqueFull, OutReq_WriteUniquePtl,
-               OutReq_WriteBackFull, OutReq_WriteCleanFull,
-               OutReq_WriteEvictFull, OutReq_WriteNoSnpFull,
-               OutReq_WriteNoSnpPtl},
+transition(I, {OutReq_WriteEvictFull},
            WR_WAIT_DBID) {
   allocateTBE;
   recordLocalIDs_fromReq;
@@ -363,9 +364,9 @@ transition(WR_RETRY_WAIT, PCrdGrantFromHN, WR_FWD_WAIT_DBID) {
   popRspInQueue;
 }
 
-// Dataless/Evict/Atomic share REQ_RETRY_WAIT for now.
-// TODO(Phase 4): split into per-flow retry states.
-transition({DL_FWD_WAIT, EV_FWD_WAIT, ATOMIC_FWD_WAIT},
+// Dataless/Evict/Atomic/WritePush-rcv share REQ_RETRY_WAIT for now.
+transition({DL_FWD_WAIT, EV_FWD_WAIT, ATOMIC_FWD_WAIT,
+            WR_PUSH_FWD_WAIT_DBID},
            RetryAckFromHN, REQ_RETRY_WAIT) {
   recordPCrdType;
   popRspInQueue;
@@ -586,6 +587,75 @@ transition(DVM_WAIT_COMP, RspIn_Comp, I) {
 }
 
 ////////////////////////////////////////////////////////////////////////////
+// WritePush source-side flow (Phase 6: IHI0098A B4.6)
+// Local RN sends write req + WriteData as separate messages.
+// C2CG buffers write req, then combines with WriteData into
+// WrReqDataS/L and sends as single C2C DAT message.
+// Consume: REQ + DAT credit on combined send
+// Return: RSP credit on Comp from remote
+////////////////////////////////////////////////////////////////////////////
+
+// Outbound write eligible for WritePush: buffer request, wait for data
+transition(I, {OutReq_WriteNoSnpFull, OutReq_WriteNoSnpPtl,
+               OutReq_WriteUniqueFull, OutReq_WriteUniquePtl,
+               OutReq_WriteBackFull, OutReq_WriteCleanFull},
+           WR_PUSH_WAIT_DATA) {
+  allocateTBE;
+  recordLocalIDs_fromReq;
+  popReqRdyQueue;
+}
+
+// WriteData arrives from local RN -> combine and send WrReqData
+transition(WR_PUSH_WAIT_DATA, {DatIn_CBWrData, DatIn_NCBWrData},
+           WR_PUSH_SENT) {
+  consumeReqCredit;
+  consumeDatCredit;
+  combineAndSendWritePush;
+  popDatInQueue;
+}
+
+// Comp from remote completes WritePush
+transition(WR_PUSH_SENT, RspIn_Comp, I) {
+  forwardC2CRspToLocal;
+  returnRspCredit;
+  deallocateTBE;
+  wakeUpStalled;
+  popC2CRxRspQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// WritePush receiver-side flow (Phase 6)
+// Peer C2CG receives WrReqDataS/L on C2C DAT, splits into separate
+// write request (to local HN) + buffered data.
+// After DBID from HN, sends buffered data as CBWrData.
+// Return: DAT credit on WrReqData dequeue
+////////////////////////////////////////////////////////////////////////////
+
+// WrReqDataS/L from C2C -> split: forward REQ to local HN, buffer data
+transition(I, DatIn_WrReqData, WR_PUSH_FWD_WAIT_DBID) {
+  allocateTBE;
+  splitWrReqDataToReq;
+  returnDatCredit;
+  popC2CRxDatQueue;
+}
+
+// DBID from local HN -> send buffered data to HN
+transition(WR_PUSH_FWD_WAIT_DBID, {RspIn_CompDBIDResp, RspIn_DBIDResp},
+           WR_PUSH_FWD_WAIT_COMP) {
+  sendBufferedWriteData;
+  popRspInQueue;
+}
+
+// Comp from local HN -> forward to remote peer, done
+transition(WR_PUSH_FWD_WAIT_COMP, RspIn_Comp, I) {
+  consumeRspCredit;
+  forwardLocalRspToC2C;
+  deallocateTBE;
+  wakeUpStalled;
+  popRspInQueue;
+}
+
+////////////////////////////////////////////////////////////////////////////
 // Retry/credit trigger queue (valid in all states)
 ////////////////////////////////////////////////////////////////////////////
 
@@ -598,7 +668,9 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
             ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
-            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP},
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
+            WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
            SendRetryAck) {
   sendRetryAck;
   popRetryTriggerQueue;
@@ -613,7 +685,9 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
             ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
-            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP},
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
+            WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
            SendPCrdGrant) {
   sendPCrdGrant;
   popRetryTriggerQueue;
@@ -631,7 +705,9 @@ transition({REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
             ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
-            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP},
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
+            WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
            {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
             OutReq_ReadNoSnp, OutReq_ReadNotSharedDirty,
             OutReq_CleanUnique, OutReq_Evict,

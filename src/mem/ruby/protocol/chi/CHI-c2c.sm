@@ -28,7 +28,7 @@
 
 // CHI C2C Gateway Controller
 // Implements the protocol-layer gateway per IHI0098A (AMBA CHI C2C)
-// Phase 5: Interface management (state guards, instant-init)
+// Phase 6: WritePush combining (WrReqDataS/L)
 
 machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
@@ -200,6 +200,18 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
         desc="DVM originator: DvmOp sent, waiting for DBIDResp";
     DVM_WAIT_COMP,     AccessPermission:Busy,
         desc="DVM originator: NCBWrData sent, waiting for Comp";
+
+    // WritePush path (source C2CG combines req+data)
+    WR_PUSH_WAIT_DATA, AccessPermission:Busy,
+        desc="WritePush: request buffered, waiting for WriteData";
+    WR_PUSH_SENT,      AccessPermission:Busy,
+        desc="WritePush: WrReqData sent, waiting for Comp";
+
+    // WritePush receiver path (peer splits WrReqData)
+    WR_PUSH_FWD_WAIT_DBID, AccessPermission:Busy,
+        desc="WritePush rcv: REQ sent to HN, waiting for DBID";
+    WR_PUSH_FWD_WAIT_COMP, AccessPermission:Busy,
+        desc="WritePush rcv: data sent to HN, waiting for Comp";
   }
 
 
@@ -258,6 +270,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     DatIn_SnpRespData,           desc="SnpRespData received";
     DatIn_CBWrData,              desc="CBWrData received";
     DatIn_NCBWrData,             desc="NCBWrData received";
+    DatIn_WrReqData,             desc="WrReqDataS/L received from C2C";
 
     // Retry handling
     RetryAckFromHN,              desc="RetryAck from local HN (absorb)";

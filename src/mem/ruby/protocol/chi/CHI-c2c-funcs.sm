@@ -262,6 +262,10 @@ Event dataToEvent(CHIDataType type) {
     return Event:DatIn_SnpRespData;
   } else if (type == CHIDataType:SnpRespData_I_Fwded_SC) {
     return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:WrReqDataS) {
+    return Event:DatIn_WrReqData;
+  } else if (type == CHIDataType:WrReqDataL) {
+    return Event:DatIn_WrReqData;
   } else {
     error("Invalid CHIDataType for C2CG dataToEvent");
   }

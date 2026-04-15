@@ -27,7 +27,7 @@
  */
 
 // CHI C2C Gateway action definitions
-// Phase 3: Credit-based flow control
+// Phase 6: WritePush combining
 
 ////////////////////////////////////////////////////////////////////////////
 // Credit management actions
@@ -599,4 +599,89 @@ action(deallocateDvmTBE, "ddvmtbe", desc="Deallocate DVM TBE") {
   dvmTBEs.deallocate(address);
   unset_tbe();
   // No retry-queue handling: DVM TBEs are separate from main pool
+}
+
+////////////////////////////////////////////////////////////////////////////
+// WritePush actions (Phase 6: IHI0098A B4.6)
+////////////////////////////////////////////////////////////////////////////
+
+// Source-side: combine buffered request + arriving WriteData into
+// WrReqDataS (<=32B) or WrReqDataL (<=64B) and send across C2C DAT.
+action(combineAndSendWritePush, "cwp",
+       desc="Combine req+data into WrReqData and send to C2C") {
+  assert(is_valid(tbe));
+  peek(datInPort, CHIDataMsg) {
+    // IHI0098A B4.6: Short <=32B, Long <=64B
+    CHIDataType wpType := CHIDataType:WrReqDataL;
+    if (data_channel_size <= 32) {
+      wpType := CHIDataType:WrReqDataS;
+    }
+    enqueue(c2cTxDatOutPort, CHIDataMsg, data_latency) {
+      out_msg.addr := address;
+      out_msg.type := wpType;
+      out_msg.responder := machineID;
+      out_msg.dataBlk := in_msg.dataBlk;
+      out_msg.bitMask := in_msg.bitMask;
+      out_msg.txnId := tbe.addr;
+      out_msg.usesTxnId := true;
+      out_msg.isC2C := true;
+      out_msg.c2cSrcGateway := machineID;
+      out_msg.wrReqType := tbe.reqType;
+      out_msg.Destination.clear();
+      out_msg.Destination.add(
+          mapAddressToDownstreamMachine(address));
+    }
+  }
+}
+
+// Receiver-side: split incoming WrReqData into a write request
+// forwarded to the local HN via reqOut.
+action(splitWrReqDataToReq, "swrr",
+       desc="Split WrReqData: forward write request to local HN") {
+  assert(is_valid(tbe));
+  peek(c2cRxDatInPort, CHIDataMsg) {
+    tbe.reqType := in_msg.wrReqType;
+    tbe.remoteSrcID := in_msg.responder;
+    tbe.remoteTxnID := in_msg.txnId;
+    tbe.peerC2CG := in_msg.c2cSrcGateway;
+    tbe.localSrcID := machineID;
+    tbe.isWrite := true;
+    // Buffer the data for later forwarding after DBID
+    tbe.dataBlk := in_msg.dataBlk;
+    tbe.dataBlkValid := in_msg.bitMask;
+    enqueue(reqOutPort, CHIRequestMsg, request_latency) {
+      out_msg.addr := in_msg.addr;
+      out_msg.accAddr := in_msg.addr;
+      out_msg.accSize := blockSize;
+      out_msg.type := in_msg.wrReqType;
+      out_msg.requestor := machineID;
+      out_msg.txnId := tbe.addr;
+      out_msg.usesTxnId := true;
+      out_msg.isC2C := false;
+      out_msg.allowRetry := true;
+      out_msg.Destination.clear();
+      out_msg.Destination.add(
+          mapAddressToDownstreamMachine(in_msg.addr));
+    }
+  }
+}
+
+// Receiver-side: after DBID from local HN, send buffered data as
+// CBWrData to the local HN.
+action(sendBufferedWriteData, "sbwd",
+       desc="Send TBE-buffered write data to local HN") {
+  assert(is_valid(tbe));
+  enqueue(datOutPort, CHIDataMsg, data_latency) {
+    out_msg.addr := tbe.addr;
+    out_msg.type := CHIDataType:CBWrData_I;
+    out_msg.responder := machineID;
+    out_msg.dataBlk := tbe.dataBlk;
+    out_msg.bitMask := tbe.dataBlkValid;
+    out_msg.txnId := tbe.addr;
+    out_msg.usesTxnId := true;
+    out_msg.isC2C := false;
+    out_msg.Destination.clear();
+    out_msg.Destination.add(
+        mapAddressToDownstreamMachine(tbe.addr));
+  }
 }

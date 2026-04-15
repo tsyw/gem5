@@ -81,11 +81,23 @@ in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
   if (c2cRxDatInPort.isReady(clockEdge())) {
     printResources();
     peek(c2cRxDatInPort, CHIDataMsg) {
-      TBE tbe := TBEs[in_msg.addr];
-      if (is_valid(tbe) == false) {
-        tbe := dvmTBEs[in_msg.addr];
+      Event evt := dataToEvent(in_msg.type);
+      // WritePush WrReqData starts a new transaction: needs TBE slot
+      if (evt == Event:DatIn_WrReqData) {
+        if (storTBEs.areNSlotsAvailable(1)) {
+          storTBEs.incrementReserved();
+          trigger(evt, in_msg.addr, TBEs[in_msg.addr]);
+        } else {
+          c2cRxDatInPort.recycle(clockEdge(),
+                                  cyclesToTicks(stall_recycle_lat));
+        }
+      } else {
+        TBE tbe := TBEs[in_msg.addr];
+        if (is_valid(tbe) == false) {
+          tbe := dvmTBEs[in_msg.addr];
+        }
+        trigger(evt, in_msg.addr, tbe);
       }
-      trigger(dataToEvent(in_msg.type), in_msg.addr, tbe);
     }
   }
 }
