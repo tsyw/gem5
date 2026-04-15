@@ -220,7 +220,8 @@ class C2CCreditManager
     void
     recordStall(int cls)
     {
-        m_stats.creditStalls++;
+        assert(cls >= 0 && cls < NUM_CLS);
+        m_stats.creditStallsPerClass[cls]++;
     }
 
   private:
@@ -251,9 +252,15 @@ class C2CCreditManager
               ADD_STAT(reqSharedUsed, "REQ shared pool credits used"),
               ADD_STAT(creditUnderflow,
                        "Credit underflow events (bug indicator)"),
-              ADD_STAT(creditStalls,
-                       "Outbound messages stalled on credit exhaustion")
-        {}
+              ADD_STAT(creditStallsPerClass,
+                       "Outbound stalls per message class (REQ/SNP/RSP/DAT)")
+        {
+            creditStallsPerClass.init(NUM_CLS);
+            creditStallsPerClass.subname(CLS_REQ, "REQ");
+            creditStallsPerClass.subname(CLS_SNP, "SNP");
+            creditStallsPerClass.subname(CLS_RSP, "RSP");
+            creditStallsPerClass.subname(CLS_DAT, "DAT");
+        }
 
         statistics::Scalar reqCreditsConsumed;
         statistics::Scalar rspCreditsConsumed;
@@ -265,7 +272,7 @@ class C2CCreditManager
         statistics::Scalar datCreditsReturned;
         statistics::Scalar reqSharedUsed;
         statistics::Scalar creditUnderflow;
-        statistics::Scalar creditStalls;
+        statistics::Vector creditStallsPerClass;
     } m_stats;
 };
 

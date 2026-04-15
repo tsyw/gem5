@@ -421,6 +421,18 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
 
   ////////////////////////////////////////////////////////////////////////////
+  // Protocol-level counters (T-011)
+  ////////////////////////////////////////////////////////////////////////////
+
+  int outboundReqCount, default="0";
+  int inboundReqCount,  default="0";
+  int snpForwardCount,  default="0";
+  int retryAbsorbCount, default="0";
+  int tbeFullRetries,   default="0";
+  int writePushCount,   default="0";
+  int dvmReqsSent,      default="0";
+
+  ////////////////////////////////////////////////////////////////////////////
   // Port definitions (includes funcs.sm for helpers)
   ////////////////////////////////////////////////////////////////////////////
 

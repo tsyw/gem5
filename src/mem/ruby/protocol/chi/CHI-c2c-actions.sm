@@ -89,6 +89,7 @@ action(checkAllocateTBE, desc="Check TBE availability and move to reqRdy") {
   } else {
     peek(reqInPort, CHIRequestMsg) {
       assert(in_msg.allowRetry);
+      tbeFullRetries := tbeFullRetries + 1;
       enqueue(retryTriggerOutPort, RetryTriggerMsg, 0) {
         out_msg.addr := in_msg.addr;
         out_msg.event := Event:SendRetryAck;
@@ -206,6 +207,7 @@ action(recordSnpIDs_fromSnp, "rsnpid", desc="Record snoop IDs from local HN") {
 
 action(forwardReqToC2CTx, "fwdReqC2C", desc="Forward request to C2C TX REQ") {
   assert(is_valid(tbe));
+  outboundReqCount := outboundReqCount + 1;
   peek(reqRdyInPort, CHIRequestMsg) {
     enqueue(c2cTxReqOutPort, CHIRequestMsg, request_latency) {
       out_msg := in_msg;
@@ -257,6 +259,7 @@ action(forwardDatToC2CTx, "fwdDatC2C", desc="Forward data to C2C TX DAT") {
 
 action(forwardSnpToC2CTx, "fwdSnpC2C", desc="Forward snoop to C2C TX SNP") {
   assert(is_valid(tbe));
+  snpForwardCount := snpForwardCount + 1;
   peek(snpInPort, CHIRequestMsg) {
     enqueue(c2cTxSnpOutPort, CHIRequestMsg, snoop_latency) {
       out_msg := in_msg;
@@ -301,6 +304,7 @@ action(forwardC2CSnpDatToLocal, "fwdC2CSnpDatL",
 
 action(forwardC2CReqToLocal, "fwdC2CReqL", desc="Forward C2C request to local NoC") {
   assert(is_valid(tbe));
+  inboundReqCount := inboundReqCount + 1;
   peek(c2cRxReqInPort, CHIRequestMsg) {
     enqueue(reqOutPort, CHIRequestMsg, request_latency) {
       out_msg := in_msg;
@@ -419,6 +423,7 @@ action(sendPCrdGrant, desc="Send PCrdGrant to retrying requester") {
 action(recordPCrdType, "rpct", desc="Record PCrdType from RetryAck") {
   assert(is_valid(tbe));
   tbe.retryPending := true;
+  retryAbsorbCount := retryAbsorbCount + 1;
 }
 
 action(reissueRequest, "reis", desc="Re-issue request after PCrdGrant") {
@@ -528,6 +533,7 @@ action(recordDvmP1, "rdvmp1",
 action(sendDvmReqToC2C, "sdvmreq",
        desc="Reconstruct DvmOp and send to C2C REQ") {
   assert(is_valid(tbe));
+  dvmReqsSent := dvmReqsSent + 1;
   Addr remoteDvmAddr := intToAddress(
       addressToInt(tbe.localTxnID) + dvm_txnid_offset);
   tbe.remoteTxnID := remoteDvmAddr;
@@ -610,6 +616,7 @@ action(deallocateDvmTBE, "ddvmtbe", desc="Deallocate DVM TBE") {
 action(combineAndSendWritePush, "cwp",
        desc="Combine req+data into WrReqData and send to C2C") {
   assert(is_valid(tbe));
+  writePushCount := writePushCount + 1;
   peek(datInPort, CHIDataMsg) {
     // IHI0098A B4.6: Short <=32B, Long <=64B
     CHIDataType wpType := CHIDataType:WrReqDataL;
@@ -639,6 +646,7 @@ action(combineAndSendWritePush, "cwp",
 action(splitWrReqDataToReq, "swrr",
        desc="Split WrReqData: forward write request to local HN") {
   assert(is_valid(tbe));
+  inboundReqCount := inboundReqCount + 1;
   peek(c2cRxDatInPort, CHIDataMsg) {
     tbe.reqType := in_msg.wrReqType;
     tbe.remoteSrcID := in_msg.responder;
