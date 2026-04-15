@@ -41,7 +41,9 @@ C2CPacketizerBridge::C2CPacketizerBridge(const Params &p)
     : ClockedObject(p),
       Consumer(this),
       containerLatency(Cycles(p.container_latency)),
-      rubySystem(p.ruby_system)
+      rubySystem(p.ruby_system),
+      txCreditMgr(nullptr),
+      rxCreditMgr(nullptr)
 {
     inBuf[CH_RSP] = p.txRsp;
     inBuf[CH_DAT] = p.txDat;
@@ -63,6 +65,14 @@ C2CPacketizerBridge::init()
     for (int i = 0; i < NUM_CHANNELS; i++) {
         inBuf[i]->setConsumer(this);
     }
+
+    // Look up credit managers via the static registry
+    txCreditMgr = C2CCreditManager::lookup(params().tx_controller);
+    rxCreditMgr = C2CCreditManager::lookup(params().rx_controller);
+    panic_if(!txCreditMgr, "%s: no C2CCreditManager for tx_controller",
+             name());
+    panic_if(!rxCreditMgr, "%s: no C2CCreditManager for rx_controller",
+             name());
 }
 
 void
@@ -144,6 +154,18 @@ C2CPacketizerBridge::packAndDeliver()
             DPRINTF(RubyCHIC2CPacketizer,
                     "Packed ch=%d, %u granules used, %u remain\n", ch,
                     granPerMsg, remaining);
+        }
+    }
+
+    // Piggyback credit returns only when a container was actually sent
+    if (remaining < chi_c2c::NUM_MSG_GRANULES) {
+        uint8_t crReq = 0, crRsp = 0, crDat = 0, crSnp = 0;
+        txCreditMgr->drainReturnPending(crReq, crRsp, crDat, crSnp);
+        if (crReq || crRsp || crDat || crSnp) {
+            rxCreditMgr->applyReturnCredits(crReq, crRsp, crDat, crSnp);
+            DPRINTF(RubyCHIC2CPacketizer,
+                    "Credit return: req=%u rsp=%u dat=%u snp=%u\n", crReq,
+                    crRsp, crDat, crSnp);
         }
     }
 }

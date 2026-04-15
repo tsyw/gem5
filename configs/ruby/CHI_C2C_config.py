@@ -156,6 +156,8 @@ def wireC2CLink(c2cg_a, c2cg_b, ruby_system=None, container_latency=1):
             rxMisc=rx_cntrl.c2cRxMisc,
             container_latency=container_latency,
             ruby_system=ruby_system,
+            tx_controller=tx_cntrl,
+            rx_controller=rx_cntrl,
         )
 
     return (_make_bridge(ca, cb), _make_bridge(cb, ca))

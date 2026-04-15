@@ -36,6 +36,7 @@
 #include "mem/ruby/network/MessageBuffer.hh"
 #include "mem/ruby/protocol/chi/c2c/C2CContainer.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
+#include "mem/ruby/structures/C2CCreditManager.hh"
 #include "params/C2CPacketizerBridge.hh"
 #include "sim/clocked_object.hh"
 
@@ -55,6 +56,10 @@ class RubySystem;
  * containers (priority: RSP > DAT > SNP > REQ > MISC), and
  * delivers messages to RX MessageBuffers with configurable
  * latency.  One container is dispatched per cycle.
+ *
+ * Each container piggybacks deferred credit returns from the
+ * TX-side controller's C2CCreditManager.  On delivery, returned
+ * credits are applied to the RX-side controller's pool.
  */
 class C2CPacketizerBridge : public ClockedObject, public Consumer
 {
@@ -86,6 +91,9 @@ class C2CPacketizerBridge : public ClockedObject, public Consumer
 
     const Cycles containerLatency;
     RubySystem *const rubySystem;
+
+    C2CCreditManager *txCreditMgr;
+    C2CCreditManager *rxCreditMgr;
 
     // Container priority: RSP > DAT > SNP > REQ > MISC
     static constexpr int priorityOrder[NUM_CHANNELS] = {CH_RSP, CH_DAT, CH_SNP,

@@ -57,3 +57,10 @@ class C2CPacketizerBridge(ClockedObject):
         1, "Per-container latency across the C2C link (cycles)"
     )
     ruby_system = Param.RubySystem("Ruby system reference")
+
+    tx_controller = Param.RubyController(
+        "TX-side controller (credit drain source)"
+    )
+    rx_controller = Param.RubyController(
+        "RX-side controller (credit apply target)"
+    )

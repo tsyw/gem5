@@ -98,7 +98,13 @@ TEST_F(C2CCreditManagerTest, ReqReturnRestores)
     mgr->consumeReqCredit(0);
     EXPECT_FALSE(mgr->hasReqCredit(0));
     mgr->returnReqCredit();
+    // Credit is deferred until drain+apply cycle
+    EXPECT_FALSE(mgr->hasReqCredit(0));
+    uint8_t rq = 0, rs = 0, dt = 0, sn = 0;
+    mgr->drainReturnPending(rq, rs, dt, sn);
+    mgr->applyReturnCredits(rq, rs, dt, sn);
     EXPECT_TRUE(mgr->hasReqCredit(0));
+    EXPECT_EQ(rq, 1);
 }
 
 // --- RSP credit tests ---
@@ -111,7 +117,12 @@ TEST_F(C2CCreditManagerTest, RspConsumeReturn)
     mgr->consumeRspCredit();
     EXPECT_FALSE(mgr->hasRspCredit());
     mgr->returnRspCredit();
+    EXPECT_FALSE(mgr->hasRspCredit());
+    uint8_t rq = 0, rs = 0, dt = 0, sn = 0;
+    mgr->drainReturnPending(rq, rs, dt, sn);
+    mgr->applyReturnCredits(rq, rs, dt, sn);
     EXPECT_TRUE(mgr->hasRspCredit());
+    EXPECT_EQ(rs, 1);
 }
 
 // --- SNP credit tests ---
@@ -123,7 +134,12 @@ TEST_F(C2CCreditManagerTest, SnpConsumeReturn)
     mgr->consumeSnpCredit();
     EXPECT_FALSE(mgr->hasSnpCredit());
     mgr->returnSnpCredit();
+    EXPECT_FALSE(mgr->hasSnpCredit());
+    uint8_t rq = 0, rs = 0, dt = 0, sn = 0;
+    mgr->drainReturnPending(rq, rs, dt, sn);
+    mgr->applyReturnCredits(rq, rs, dt, sn);
     EXPECT_TRUE(mgr->hasSnpCredit());
+    EXPECT_EQ(sn, 1);
 }
 
 // --- DAT credit tests ---
@@ -144,10 +160,53 @@ TEST_F(C2CCreditManagerTest, DatReturnRestores)
     mgr->consumeDatCredit();
     EXPECT_FALSE(mgr->hasDatCredit());
     mgr->returnDatCredit();
+    EXPECT_FALSE(mgr->hasDatCredit());
+    uint8_t rq = 0, rs = 0, dt = 0, sn = 0;
+    mgr->drainReturnPending(rq, rs, dt, sn);
+    mgr->applyReturnCredits(rq, rs, dt, sn);
     EXPECT_TRUE(mgr->hasDatCredit());
+    EXPECT_EQ(dt, 1);
 }
 
 // --- Stall recording ---
+
+TEST_F(C2CCreditManagerTest, DrainClamps)
+{
+    auto mgr = makeMgr(1, 0, 20, 20, 20, 20, 0, 0);
+    for (int i = 0; i < 20; i++) {
+        mgr->returnReqCredit();
+        mgr->returnRspCredit();
+    }
+    uint8_t rq = 0, rs = 0, dt = 0, sn = 0;
+    mgr->drainReturnPending(rq, rs, dt, sn);
+    EXPECT_EQ(rq, 15);
+    EXPECT_EQ(rs, 15);
+    // Remaining 5 still pending
+    mgr->drainReturnPending(rq, rs, dt, sn);
+    EXPECT_EQ(rq, 5);
+    EXPECT_EQ(rs, 5);
+}
+
+TEST_F(C2CCreditManagerTest, DrainEmpty)
+{
+    auto mgr = makeMgr();
+    uint8_t rq = 0, rs = 0, dt = 0, sn = 0;
+    mgr->drainReturnPending(rq, rs, dt, sn);
+    EXPECT_EQ(rq, 0);
+    EXPECT_EQ(rs, 0);
+    EXPECT_EQ(dt, 0);
+    EXPECT_EQ(sn, 0);
+}
+
+TEST_F(C2CCreditManagerTest, RegistryLookup)
+{
+    auto mgr = makeMgr();
+    EXPECT_EQ(C2CCreditManager::lookup(&statsRoot), mgr.get());
+    mgr.reset();
+    EXPECT_EQ(C2CCreditManager::lookup(&statsRoot), nullptr);
+}
+
+// --- Stall recording (original) ---
 
 TEST_F(C2CCreditManagerTest, RecordStallPerClass)
 {
