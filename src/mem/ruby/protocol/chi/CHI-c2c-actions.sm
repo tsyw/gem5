@@ -216,7 +216,7 @@ action(forwardReqToC2CTx, "fwdReqC2C", desc="Forward request to C2C TX REQ") {
     enqueue(c2cTxReqOutPort, CHIRequestMsg, request_latency) {
       out_msg := in_msg;
       out_msg.requestor := machineID;
-      out_msg.txnId := tbe.addr;  // use address as TxnID for Phase 1
+      out_msg.txnId := intToAddress(tbe.storSlot);
       out_msg.usesTxnId := true;
       out_msg.isC2C := true;
       out_msg.origSrcID := tbe.localSrcID;
@@ -235,7 +235,7 @@ action(forwardRspToC2CTx, "fwdRspC2C", desc="Forward response to C2C TX RSP") {
     enqueue(c2cTxRspOutPort, CHIResponseMsg, response_latency) {
       out_msg := in_msg;
       out_msg.responder := machineID;
-      out_msg.txnId := tbe.addr;
+      out_msg.txnId := intToAddress(tbe.storSlot);
       out_msg.usesTxnId := true;
       out_msg.isC2C := true;
       out_msg.c2cSrcGateway := machineID;
@@ -251,7 +251,7 @@ action(forwardDatToC2CTx, "fwdDatC2C", desc="Forward data to C2C TX DAT") {
     enqueue(c2cTxDatOutPort, CHIDataMsg, data_latency) {
       out_msg := in_msg;
       out_msg.responder := machineID;
-      out_msg.txnId := tbe.addr;
+      out_msg.txnId := intToAddress(tbe.storSlot);
       out_msg.usesTxnId := true;
       out_msg.isC2C := true;
       out_msg.c2cSrcGateway := machineID;
@@ -313,7 +313,7 @@ action(forwardC2CReqToLocal, "fwdC2CReqL", desc="Forward C2C request to local No
     enqueue(reqOutPort, CHIRequestMsg, request_latency) {
       out_msg := in_msg;
       out_msg.requestor := machineID;  // rewrite SrcID to this C2CG
-      out_msg.txnId := tbe.addr;  // Phase 1: address-based
+      out_msg.txnId := intToAddress(tbe.storSlot);
       out_msg.usesTxnId := true;
       out_msg.isC2C := false;  // clear C2C flag for local NoC
       out_msg.allowRetry := true;
@@ -437,7 +437,7 @@ action(reissueRequest, "reis", desc="Re-issue request after PCrdGrant") {
     out_msg.addr := tbe.addr;
     out_msg.type := tbe.reqType;
     out_msg.requestor := machineID;
-    out_msg.txnId := tbe.addr;
+    out_msg.txnId := intToAddress(tbe.storSlot);
     out_msg.usesTxnId := true;
     out_msg.allowRetry := false;  // already have credit
     out_msg.Destination.clear();
@@ -635,7 +635,7 @@ action(combineAndSendWritePush, "cwp",
       out_msg.responder := machineID;
       out_msg.dataBlk := in_msg.dataBlk;
       out_msg.bitMask := in_msg.bitMask;
-      out_msg.txnId := tbe.addr;
+      out_msg.txnId := intToAddress(tbe.storSlot);
       out_msg.usesTxnId := true;
       out_msg.isC2C := true;
       out_msg.c2cSrcGateway := machineID;
@@ -669,7 +669,7 @@ action(splitWrReqDataToReq, "swrr",
       out_msg.accSize := blockSize;
       out_msg.type := in_msg.wrReqType;
       out_msg.requestor := machineID;
-      out_msg.txnId := tbe.addr;
+      out_msg.txnId := intToAddress(tbe.storSlot);
       out_msg.usesTxnId := true;
       out_msg.isC2C := false;
       out_msg.allowRetry := true;
@@ -691,7 +691,7 @@ action(sendBufferedWriteData, "sbwd",
     out_msg.responder := machineID;
     out_msg.dataBlk := tbe.dataBlk;
     out_msg.bitMask := tbe.dataBlkValid;
-    out_msg.txnId := tbe.addr;
+    out_msg.txnId := intToAddress(tbe.storSlot);
     out_msg.usesTxnId := true;
     out_msg.isC2C := false;
     out_msg.Destination.clear();
