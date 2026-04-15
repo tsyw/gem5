@@ -51,6 +51,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   bool dvm_support := "true";
   bool snoop_support := "true";
   bool atomic_support := "true";
+  bool writepush_enabled := "true";
 
   // Data channel width
   int data_channel_size;
@@ -189,6 +190,16 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     ATOMIC_FWD_WAIT,   AccessPermission:Busy,
         desc="Inbound atomic waiting for CompData from local HN";
 
+    // Retry-wait states for inbound flows
+    DL_RETRY_WAIT,     AccessPermission:Busy,
+        desc="Inbound dataless retry waiting for PCrdGrant";
+    EV_RETRY_WAIT,     AccessPermission:Busy,
+        desc="Inbound Evict retry waiting for PCrdGrant";
+    ATOMIC_RETRY_WAIT, AccessPermission:Busy,
+        desc="Inbound atomic retry waiting for PCrdGrant";
+    WR_PUSH_RETRY_WAIT, AccessPermission:Busy,
+        desc="WritePush rcv retry waiting for PCrdGrant";
+
     // Snoop path
     SNP_WAIT_RESP,     AccessPermission:Busy,
         desc="Snoop forwarded across C2C, awaiting response";
@@ -238,6 +249,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     OutReq_WriteEvictFull,       desc="WriteEvictFull for remote";
     OutReq_WriteNoSnpFull,       desc="WriteNoSnpFull for remote";
     OutReq_WriteNoSnpPtl,        desc="WriteNoSnpPtl for remote";
+    OutReq_WritePull,            desc="Write via WritePull (push disabled)";
     OutReq_Evict,                desc="Evict for remote";
     OutReq_AtomicStore,          desc="AtomicNoReturn for remote";
     OutReq_AtomicLoad,           desc="AtomicReturn for remote";

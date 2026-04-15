@@ -167,7 +167,12 @@ in_port(snpInPort, CHIRequestMsg, snpIn, rank=6) {
                             cyclesToTicks(stall_recycle_lat));
         } else if (isDvmP1(in_msg.type)) {
           // P1: allocate dvmTBE, no C2C credit needed yet
-          if (storDvmTBEs.areNSlotsAvailable(1) == false) {
+          // Reserve extra slot for sync if this is non-sync (T-010)
+          int dvmSlotsNeeded := 1;
+          if (isDvmSyncType(in_msg.type) == false) {
+            dvmSlotsNeeded := 2;  // reserve 1 for potential sync
+          }
+          if (storDvmTBEs.areNSlotsAvailable(dvmSlotsNeeded) == false) {
             snpInPort.recycle(clockEdge(),
                               cyclesToTicks(stall_recycle_lat));
           } else {
@@ -237,6 +242,12 @@ in_port(reqRdyInPort, CHIRequestMsg, reqRdy, rank=3) {
           creditMgr.recordStall(0);  // CLS_REQ=0
           reqRdyInPort.recycle(clockEdge(),
                                cyclesToTicks(stall_recycle_lat));
+        } else if (writepush_enabled == false &&
+                   isWriteRequest(in_msg.type) &&
+                   in_msg.type != CHIRequestType:WriteEvictFull) {
+          // WritePull fallback: WriteEvictFull always uses pull path
+          trigger(Event:OutReq_WritePull, in_msg.addr,
+                  TBEs[in_msg.addr]);
         } else {
           trigger(reqToEvent(in_msg.type), in_msg.addr,
                   TBEs[in_msg.addr]);

@@ -51,7 +51,9 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
             WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
-            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP,
+            DL_RETRY_WAIT, EV_RETRY_WAIT,
+            ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT},
            CheckAllocTBE) {
   checkAllocateTBE;
 }
@@ -67,7 +69,9 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
             WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
-            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP,
+            DL_RETRY_WAIT, EV_RETRY_WAIT,
+            ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT},
            CheckAllocTBE_WithCredit) {
   checkAllocateTBE_withCredit;
 }
@@ -154,7 +158,7 @@ transition(WAIT_COMPACK, RspIn_CompAck, I) {
 // Return: RSP credit on C2C RX dequeue
 ////////////////////////////////////////////////////////////////////////////
 
-transition(I, {OutReq_WriteEvictFull},
+transition(I, {OutReq_WriteEvictFull, OutReq_WritePull},
            WR_WAIT_DBID) {
   allocateTBE;
   recordLocalIDs_fromReq;
@@ -364,11 +368,44 @@ transition(WR_RETRY_WAIT, PCrdGrantFromHN, WR_FWD_WAIT_DBID) {
   popRspInQueue;
 }
 
-// Dataless/Evict/Atomic/WritePush-rcv share REQ_RETRY_WAIT for now.
-transition({DL_FWD_WAIT, EV_FWD_WAIT, ATOMIC_FWD_WAIT,
-            WR_PUSH_FWD_WAIT_DBID},
-           RetryAckFromHN, REQ_RETRY_WAIT) {
+// Dataless/Evict/Atomic/WritePush-rcv: per-flow retry states
+transition(DL_FWD_WAIT, RetryAckFromHN, DL_RETRY_WAIT) {
   recordPCrdType;
+  popRspInQueue;
+}
+
+transition(DL_RETRY_WAIT, PCrdGrantFromHN, DL_FWD_WAIT) {
+  reissueRequest;
+  popRspInQueue;
+}
+
+transition(EV_FWD_WAIT, RetryAckFromHN, EV_RETRY_WAIT) {
+  recordPCrdType;
+  popRspInQueue;
+}
+
+transition(EV_RETRY_WAIT, PCrdGrantFromHN, EV_FWD_WAIT) {
+  reissueRequest;
+  popRspInQueue;
+}
+
+transition(ATOMIC_FWD_WAIT, RetryAckFromHN, ATOMIC_RETRY_WAIT) {
+  recordPCrdType;
+  popRspInQueue;
+}
+
+transition(ATOMIC_RETRY_WAIT, PCrdGrantFromHN, ATOMIC_FWD_WAIT) {
+  reissueRequest;
+  popRspInQueue;
+}
+
+transition(WR_PUSH_FWD_WAIT_DBID, RetryAckFromHN, WR_PUSH_RETRY_WAIT) {
+  recordPCrdType;
+  popRspInQueue;
+}
+
+transition(WR_PUSH_RETRY_WAIT, PCrdGrantFromHN, WR_PUSH_FWD_WAIT_DBID) {
+  reissueRequest;
   popRspInQueue;
 }
 
@@ -670,7 +707,9 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
             WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
-            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP,
+            DL_RETRY_WAIT, EV_RETRY_WAIT,
+            ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT},
            SendRetryAck) {
   sendRetryAck;
   popRetryTriggerQueue;
@@ -687,7 +726,9 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
             WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
-            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP,
+            DL_RETRY_WAIT, EV_RETRY_WAIT,
+            ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT},
            SendPCrdGrant) {
   sendPCrdGrant;
   popRetryTriggerQueue;
@@ -707,7 +748,9 @@ transition({REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             ATOMIC_WAIT_RESP, ATOMIC_FWD_WAIT,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
             WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
-            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP,
+            DL_RETRY_WAIT, EV_RETRY_WAIT,
+            ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT},
            {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
             OutReq_ReadNoSnp, OutReq_ReadNotSharedDirty,
             OutReq_CleanUnique, OutReq_Evict,
@@ -715,6 +758,7 @@ transition({REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             OutReq_WriteBackFull, OutReq_WriteCleanFull,
             OutReq_WriteEvictFull, OutReq_WriteNoSnpFull,
             OutReq_WriteNoSnpPtl,
+            OutReq_WritePull,
             OutReq_AtomicStore, OutReq_AtomicLoad}) {
   stallRequestQueue;
 }
