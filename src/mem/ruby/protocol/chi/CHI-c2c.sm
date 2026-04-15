@@ -96,6 +96,10 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   MessageBuffer * c2cRxRsp;
   MessageBuffer * c2cRxDat;
 
+  // MISC channel (IHI0098A B4.8: DVM/barrier/sync messages)
+  MessageBuffer * c2cTxMisc;
+  MessageBuffer * c2cRxMisc;
+
   // Internal queues
   MessageBuffer * triggerQueue;
   MessageBuffer * retryTriggerQueue;

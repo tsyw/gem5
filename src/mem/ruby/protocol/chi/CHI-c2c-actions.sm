@@ -124,6 +124,8 @@ action(allocateTBE, "atbe", desc="Allocate TBE for a transaction") {
 
 action(deallocateTBE, "dtbe", desc="Deallocate TBE") {
   assert(is_valid(tbe));
+  DPRINTF(RubySlicc, "C2C TBE dealloc addr=%#x lifetime=%llu ticks\n",
+          address, curTick() - tbe.allocTime);
   storTBEs.removeEntryFromSlot(tbe.storSlot);
   TBEs.deallocate(address);
   unset_tbe();
@@ -154,6 +156,8 @@ action(allocateSnpTBE, "asnptbe", desc="Allocate snoop TBE") {
 
 action(deallocateSnpTBE, "dsnptbe", desc="Deallocate snoop TBE") {
   assert(is_valid(tbe));
+  DPRINTF(RubySlicc, "C2C snpTBE dealloc addr=%#x lifetime=%llu ticks\n",
+          address, curTick() - tbe.allocTime);
   storSnpTBEs.removeEntryFromSlot(tbe.storSlot);
   snpTBEs.deallocate(address);
   unset_tbe();
@@ -601,6 +605,8 @@ action(sendSnpRespIToMN, "ssnprsp",
 
 action(deallocateDvmTBE, "ddvmtbe", desc="Deallocate DVM TBE") {
   assert(is_valid(tbe));
+  DPRINTF(RubySlicc, "C2C dvmTBE dealloc addr=%#x lifetime=%llu ticks\n",
+          address, curTick() - tbe.allocTime);
   storDvmTBEs.removeEntryFromSlot(tbe.storSlot);
   dvmTBEs.deallocate(address);
   unset_tbe();

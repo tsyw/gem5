@@ -86,7 +86,9 @@ c2cg.c2cRxReq = MessageBuffer()
 c2cg.c2cRxSnp = MessageBuffer()
 c2cg.c2cRxRsp = MessageBuffer()
 c2cg.c2cRxDat = MessageBuffer()
-print("5. C2C MessageBuffers (8) created: OK")
+c2cg.c2cTxMisc = MessageBuffer()
+c2cg.c2cRxMisc = MessageBuffer()
+print("5. C2C MessageBuffers (10) created: OK")
 
 # Step 5: Attach to system
 system.ruby.c2cg = c2cg

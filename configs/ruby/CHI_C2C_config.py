@@ -97,6 +97,8 @@ class CHI_C2CG(CHI_Node):
         self._cntrl.c2cRxSnp = MessageBuffer()
         self._cntrl.c2cRxRsp = MessageBuffer()
         self._cntrl.c2cRxDat = MessageBuffer()
+        self._cntrl.c2cTxMisc = MessageBuffer()
+        self._cntrl.c2cRxMisc = MessageBuffer()
 
     def getAllControllers(self):
         return [self._cntrl]
@@ -115,7 +117,7 @@ def wireC2CLink(c2cg_a, c2cg_b):
     ca = c2cg_a.getAllControllers()[0]
     cb = c2cg_b.getAllControllers()[0]
 
-    for ch in ["Req", "Snp", "Rsp", "Dat"]:
+    for ch in ["Req", "Snp", "Rsp", "Dat", "Misc"]:
         buf_a2b = MessageBuffer()
         buf_b2a = MessageBuffer()
         setattr(ca, f"c2cTx{ch}", buf_a2b)
