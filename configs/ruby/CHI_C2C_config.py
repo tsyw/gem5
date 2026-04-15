@@ -107,20 +107,55 @@ class CHI_C2CG(CHI_Node):
         return [self._cntrl]
 
 
-def wireC2CLink(c2cg_a, c2cg_b):
+def wireC2CLink(c2cg_a, c2cg_b, ruby_system=None, container_latency=1):
     """
-    Wire two C2CG nodes' TX/RX MessageBuffers together.
+    Wire two C2CG nodes via C2CPacketizerBridge instances.
 
-    In Phase 1, this is a simple pass-through: the TX buffer of one
-    C2CG is the RX buffer of the other.
+    Creates two unidirectional bridges (A→B and B→A), each modeling
+    Format X container bandwidth (12 granules per container per cycle).
+
+    If ruby_system is None, falls back to direct MessageBuffer wiring
+    (legacy mode, useful for unit tests that don't need packetization).
+
+    Returns (bridge_a2b, bridge_b2a) when bridges are created, or
+    None when using legacy mode.  Caller must attach returned bridges
+    to the SimObject hierarchy (e.g., system.c2c_bridge_a2b = ...).
     """
     ca = c2cg_a.getAllControllers()[0]
     cb = c2cg_b.getAllControllers()[0]
 
+    if ruby_system is None:
+        # Legacy direct wiring (no packetizer)
+        for ch in ["Req", "Snp", "Rsp", "Dat", "Misc"]:
+            buf_a2b = MessageBuffer()
+            buf_b2a = MessageBuffer()
+            setattr(ca, f"c2cTx{ch}", buf_a2b)
+            setattr(cb, f"c2cRx{ch}", buf_a2b)
+            setattr(cb, f"c2cTx{ch}", buf_b2a)
+            setattr(ca, f"c2cRx{ch}", buf_b2a)
+        return None
+
+    # Create separate TX/RX buffers per direction per channel
     for ch in ["Req", "Snp", "Rsp", "Dat", "Misc"]:
-        buf_a2b = MessageBuffer()
-        buf_b2a = MessageBuffer()
-        setattr(ca, f"c2cTx{ch}", buf_a2b)
-        setattr(cb, f"c2cRx{ch}", buf_a2b)
-        setattr(cb, f"c2cTx{ch}", buf_b2a)
-        setattr(ca, f"c2cRx{ch}", buf_b2a)
+        setattr(ca, f"c2cTx{ch}", MessageBuffer())
+        setattr(cb, f"c2cRx{ch}", MessageBuffer())
+        setattr(cb, f"c2cTx{ch}", MessageBuffer())
+        setattr(ca, f"c2cRx{ch}", MessageBuffer())
+
+    def _make_bridge(tx_cntrl, rx_cntrl):
+        return C2CPacketizerBridge(
+            txReq=tx_cntrl.c2cTxReq,
+            txSnp=tx_cntrl.c2cTxSnp,
+            txRsp=tx_cntrl.c2cTxRsp,
+            txDat=tx_cntrl.c2cTxDat,
+            txMisc=tx_cntrl.c2cTxMisc,
+            rxReq=rx_cntrl.c2cRxReq,
+            rxSnp=rx_cntrl.c2cRxSnp,
+            rxRsp=rx_cntrl.c2cRxRsp,
+            rxDat=rx_cntrl.c2cRxDat,
+            rxMisc=rx_cntrl.c2cRxMisc,
+            container_latency=container_latency,
+            ruby_system=ruby_system,
+        )
+
+    return (_make_bridge(ca, cb), _make_bridge(cb, ca))

@@ -193,7 +193,10 @@ def build_two_chip_system(
     network_cntrls.extend(c2cg1.getNetworkSideControllers())
 
     # --- Wire C2C link ---
-    wireC2CLink(c2cg0, c2cg1)
+    bridges = wireC2CLink(c2cg0, c2cg1, ruby_system)
+    if bridges is not None:
+        system.c2c_bridge_a2b = bridges[0]
+        system.c2c_bridge_b2a = bridges[1]
 
     # --- Downstream routing ---
     hnf0_cntrls = hnf0.getAllControllers()

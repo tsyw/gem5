@@ -1,5 +1,3 @@
-# -*- mode:python -*-
-
 # Copyright (c) 2025 The gem5 Contributors
 # All rights reserved.
 #
@@ -26,19 +24,36 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Import('*')
+from m5.objects.ClockedObject import ClockedObject
+from m5.params import *
 
-if env['CONF']['PROTOCOL'] != 'CHI':
-    Return()
 
-Source('C2CContainer.cc')
-Source('C2CPacketizer.cc')
-Source('C2CPacketizerBridge.cc')
+class C2CPacketizerBridge(ClockedObject):
+    """Unidirectional bridge that models Format X container bandwidth
+    between two CHI C2C Gateway controllers.
 
-SimObject('C2CPacketizerBridge.py',
-          sim_objects=['C2CPacketizerBridge'])
+    Drains TX MessageBuffers, packs messages into 12-granule containers
+    (priority: RSP > DAT > SNP > REQ > MISC), and delivers cloned
+    messages to RX MessageBuffers with configurable latency.
+    """
 
-GTest('C2CPacketizer.test', 'C2CPacketizer.test.cc',
-      'C2CContainer.cc', 'C2CPacketizer.cc')
+    type = "C2CPacketizerBridge"
+    cxx_header = "mem/ruby/protocol/chi/c2c/C2CPacketizerBridge.hh"
+    cxx_class = "gem5::ruby::C2CPacketizerBridge"
 
-DebugFlag('RubyCHIC2CPacketizer')
+    txReq = Param.MessageBuffer("TX REQ input buffer")
+    txSnp = Param.MessageBuffer("TX SNP input buffer")
+    txRsp = Param.MessageBuffer("TX RSP input buffer")
+    txDat = Param.MessageBuffer("TX DAT input buffer")
+    txMisc = Param.MessageBuffer("TX MISC input buffer")
+
+    rxReq = Param.MessageBuffer("RX REQ output buffer")
+    rxSnp = Param.MessageBuffer("RX SNP output buffer")
+    rxRsp = Param.MessageBuffer("RX RSP output buffer")
+    rxDat = Param.MessageBuffer("RX DAT output buffer")
+    rxMisc = Param.MessageBuffer("RX MISC output buffer")
+
+    container_latency = Param.Int(
+        1, "Per-container latency across the C2C link (cycles)"
+    )
+    ruby_system = Param.RubySystem("Ruby system reference")
