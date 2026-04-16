@@ -45,6 +45,7 @@ c2c_tests = [
     ("chi-c2c-series-getx", "SeriesGetx", 20),
     ("chi-c2c-series-gets", "SeriesGets", 20),
     ("chi-c2c-series-mixed", "SeriesGetMixed", 20),
+    ("chi-c2c-invalidate", "Invalidate", 100),
 ]
 
 for name, test_type, requests in c2c_tests:
