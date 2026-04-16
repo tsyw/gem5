@@ -68,6 +68,7 @@ class C2CPacketizerBridge : public ClockedObject, public Consumer
     C2CPacketizerBridge(const Params &p);
 
     void init() override;
+    void startup() override;
     void wakeup() override;
     void print(std::ostream &out) const override;
 

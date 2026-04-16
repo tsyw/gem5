@@ -44,7 +44,7 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             DL_WAIT_COMP, EV_WAIT_COMP,
             REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
             WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
-            SNP_WAIT_RESP,
+            SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
@@ -62,7 +62,7 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             DL_WAIT_COMP, EV_WAIT_COMP,
             REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
             WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
-            SNP_WAIT_RESP,
+            SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
@@ -95,16 +95,16 @@ transition(I, {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
 
 // Combined CompData from remote (C2C RX DAT -> return DAT credit)
 transition(REQ_SENT, DatIn_CompData, WAIT_COMPACK) {
+  trackDatFlit;
   forwardC2CDatToLocal;
-  clearExpectingData;
   returnDatCredit;
   popC2CRxDatQueue;
 }
 
 // Separated: DataSepResp first (C2C RX DAT -> return DAT credit)
 transition(REQ_SENT, DatIn_DataSepResp, WAIT_COMP_ONLY) {
+  trackDatFlit;
   forwardC2CDatToLocal;
-  clearExpectingData;
   returnDatCredit;
   popC2CRxDatQueue;
 }
@@ -117,8 +117,8 @@ transition(REQ_SENT, RspIn_RespSepData, WAIT_DATA_ONLY) {
 }
 
 transition(WAIT_DATA_ONLY, DatIn_DataSepResp, WAIT_COMPACK) {
+  trackDatFlit;
   forwardC2CDatToLocal;
-  clearExpectingData;
   returnDatCredit;
   popC2CRxDatQueue;
 }
@@ -142,14 +142,30 @@ transition({REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY},
   popC2CRxRspQueue;
 }
 
-// CompAck from local RN completes outbound read
-// (NoC RSP -> consume RSP credit to send CompAck across C2C)
-transition(WAIT_COMPACK, RspIn_CompAck, I) {
+// Multi-flit: subsequent data flits while waiting for CompAck
+// Each flit is tracked; if all data+CompAck done, triggers completion
+transition(WAIT_COMPACK, {DatIn_CompData, DatIn_DataSepResp}) {
+  trackDatFlit;
+  forwardC2CDatToLocal;
+  returnDatCredit;
+  checkTxnComplete;
+  popC2CRxDatQueue;
+}
+
+// CompAck from local RN: forward to C2C, mark done, check completion
+transition(WAIT_COMPACK, RspIn_CompAck) {
   consumeRspCredit;
   forwardRspToC2CTx;
+  markCompAckDone;
+  checkTxnComplete;
+  popRspInQueue;
+}
+
+// CompleteTxn: all data flits forwarded and CompAck sent -> dealloc
+transition(WAIT_COMPACK, CompleteTxn, I) {
   deallocateTBE;
   wakeUpStalled;
-  popRspInQueue;
+  popTriggerQueue;
 }
 
 ////////////////////////////////////////////////////////////////////////////
@@ -215,6 +231,7 @@ transition(I, OutReq_CleanUnique, DL_WAIT_COMP) {
 
 // CleanUnique: Comp from remote -> forward to local, wait CompAck
 transition(DL_WAIT_COMP, RspIn_Comp, WAIT_COMPACK) {
+  markNoDataExpected;
   forwardC2CRspToLocal;
   returnRspCredit;
   popC2CRxRspQueue;
@@ -294,17 +311,26 @@ transition(I, InReq_Read, REQ_FWD) {
 
 // Combined CompData from local HN (NoC DAT -> consume DAT credit)
 transition(REQ_FWD, DatIn_CompData, FWD_WAIT_COMPACK) {
+  trackDatFlit;
   consumeDatCredit;
   forwardLocalDatToC2C;
-  clearExpectingData;
+  popDatInQueue;
+}
+
+// Multi-flit: subsequent data flits while waiting for CompAck
+transition(FWD_WAIT_COMPACK, {DatIn_CompData, DatIn_DataSepResp}) {
+  trackDatFlit;
+  consumeDatCredit;
+  forwardLocalDatToC2C;
+  checkTxnComplete;
   popDatInQueue;
 }
 
 // Separated: DataSepResp first (NoC DAT -> consume DAT credit)
 transition(REQ_FWD, DatIn_DataSepResp, FWD_WAIT_COMP_ONLY) {
+  trackDatFlit;
   consumeDatCredit;
   forwardLocalDatToC2C;
-  clearExpectingData;
   popDatInQueue;
 }
 
@@ -316,9 +342,9 @@ transition(REQ_FWD, RspIn_RespSepData, FWD_WAIT_DATA_ONLY) {
 }
 
 transition(FWD_WAIT_DATA_ONLY, DatIn_DataSepResp, FWD_WAIT_COMPACK) {
+  trackDatFlit;
   consumeDatCredit;
   forwardLocalDatToC2C;
-  clearExpectingData;
   popDatInQueue;
 }
 
@@ -335,13 +361,20 @@ transition(REQ_FWD, RspIn_Comp) {
   popRspInQueue;
 }
 
-// CompAck from remote (C2C RX RSP -> return RSP credit)
-transition(FWD_WAIT_COMPACK, RspIn_CompAck, I) {
-  forwardC2CRspToLocal;
+// CompAck from remote (C2C RX RSP): forward to local HN, check completion
+transition(FWD_WAIT_COMPACK, RspIn_CompAck) {
+  forwardCompAckToHN;
   returnRspCredit;
+  markCompAckDone;
+  checkTxnComplete;
+  popC2CRxRspQueue;
+}
+
+// CompleteTxn: all data forwarded and CompAck received -> dealloc
+transition(FWD_WAIT_COMPACK, CompleteTxn, I) {
   deallocateTBE;
   wakeUpStalled;
-  popC2CRxRspQueue;
+  popTriggerQueue;
 }
 
 ////////////////////////////////////////////////////////////////////////////
@@ -472,6 +505,7 @@ transition(I, InReq_Dataless, DL_FWD_WAIT) {
 
 // CleanUnique: Comp from local HN -> forward to remote, wait CompAck
 transition(DL_FWD_WAIT, RspIn_Comp, FWD_WAIT_COMPACK) {
+  markNoDataExpected;
   consumeRspCredit;
   forwardLocalRspToC2C;
   popRspInQueue;
@@ -563,12 +597,30 @@ transition(SNP_WAIT_RESP, DatIn_SnpRespData, I) {
   popC2CRxDatQueue;
 }
 
-// Inbound snoop from remote -> stateless broadcast to local
+// Inbound snoop from remote -> deliver to local caches, await response
 // Return: SNP credit on C2C RX SNP dequeue
-transition(I, InSnp_Deliver) {
+transition(I, InSnp_Deliver, INB_SNP_WAIT_RESP) {
+  allocateSnpTBE;
+  recordInboundSnpIDs;
   forwardC2CSnpToLocal;
   returnSnpCredit;
   popC2CRxSnpQueue;
+}
+
+// Inbound snoop response (no data) from local cache
+transition(INB_SNP_WAIT_RESP, RspIn_SnpResp, I) {
+  consumeRspCredit;
+  forwardLocalSnpRspToC2C;
+  deallocateSnpTBE;
+  popRspInQueue;
+}
+
+// Inbound snoop response with data from local cache
+transition(INB_SNP_WAIT_RESP, DatIn_SnpRespData, I) {
+  consumeDatCredit;
+  forwardLocalSnpDatToC2C;
+  deallocateSnpTBE;
+  popDatInQueue;
 }
 
 ////////////////////////////////////////////////////////////////////////////
@@ -700,7 +752,7 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             DL_WAIT_COMP, EV_WAIT_COMP,
             REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
             WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
-            SNP_WAIT_RESP,
+            SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
@@ -719,7 +771,7 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             DL_WAIT_COMP, EV_WAIT_COMP,
             REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
             WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
-            SNP_WAIT_RESP,
+            SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
@@ -737,6 +789,11 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
 ////////////////////////////////////////////////////////////////////////////
 // Stall transitions for busy addresses
 ////////////////////////////////////////////////////////////////////////////
+
+// Stall snoops on addresses with pending snoop forwarding
+transition(SNP_WAIT_RESP, OutSnp_Forward) {
+  stallSnpQueue;
+}
 
 transition({REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             DL_WAIT_COMP, EV_WAIT_COMP,

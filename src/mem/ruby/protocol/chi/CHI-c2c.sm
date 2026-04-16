@@ -207,6 +207,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     // Snoop path
     SNP_WAIT_RESP,     AccessPermission:Busy,
         desc="Snoop forwarded across C2C, awaiting response";
+    INB_SNP_WAIT_RESP, AccessPermission:Busy,
+        desc="Inbound snoop delivered locally, awaiting response";
 
     // DVM originator path (local MN -> C2CG -> remote MN)
     DVM_WAIT_P2,       AccessPermission:Busy,
@@ -293,6 +295,9 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     PCrdGrantFromHN,             desc="PCrdGrant from local HN";
     SendRetryAck,                desc="Send RetryAck to requester";
     SendPCrdGrant,               desc="Send PCrdGrant to requester";
+
+    // Internal completion trigger
+    CompleteTxn,                 desc="All flits done, deallocate TBE";
   }
 
 
@@ -330,6 +335,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     DataBlock dataBlk,          desc="Transaction data buffer";
     WriteMask dataBlkValid,     desc="Valid bytes in data buffer";
     int rxtxBytes,              desc="Bytes sent or received";
+    bool compAckDone,           desc="CompAck forwarded, awaiting data";
   }
 
   // TBE table for request transactions

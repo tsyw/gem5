@@ -62,7 +62,12 @@ in_port(c2cRxRspInPort, CHIResponseMsg, c2cRxRsp, rank=12,
   if (c2cRxRspInPort.isReady(clockEdge())) {
     printResources();
     peek(c2cRxRspInPort, CHIResponseMsg) {
+      DPRINTF(RubySlicc, "c2cRxRspInPort: addr=%#x type=%s responder=%s\n",
+              in_msg.addr, in_msg.type, in_msg.responder);
       TBE tbe := TBEs[in_msg.addr];
+      if (is_valid(tbe) == false) {
+        tbe := snpTBEs[in_msg.addr];
+      }
       if (is_valid(tbe) == false) {
         tbe := dvmTBEs[in_msg.addr];
       }
@@ -112,7 +117,12 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
   if (rspInPort.isReady(clockEdge())) {
     printResources();
     peek(rspInPort, CHIResponseMsg) {
+      DPRINTF(RubySlicc, "rspInPort: addr=%#x type=%s responder=%s\n",
+              in_msg.addr, in_msg.type, in_msg.responder);
       TBE tbe := TBEs[in_msg.addr];
+      if (is_valid(tbe) == false) {
+        tbe := snpTBEs[in_msg.addr];
+      }
       trigger(respToEvent(in_msg.type), in_msg.addr, tbe);
     }
   }
@@ -129,6 +139,9 @@ in_port(datInPort, CHIDataMsg, datIn, rank=9,
     printResources();
     peek(datInPort, CHIDataMsg) {
       TBE tbe := TBEs[in_msg.addr];
+      if (is_valid(tbe) == false) {
+        tbe := snpTBEs[in_msg.addr];
+      }
       trigger(dataToEvent(in_msg.type), in_msg.addr, tbe);
     }
   }
@@ -145,10 +158,14 @@ in_port(c2cRxSnpInPort, CHIRequestMsg, c2cRxSnp, rank=7) {
     if (coherencyEnabled() == false) {
       c2cRxSnpInPort.recycle(clockEdge(),
                               cyclesToTicks(stall_recycle_lat));
+    } else if (storSnpTBEs.areNSlotsAvailable(1) == false) {
+      c2cRxSnpInPort.recycle(clockEdge(),
+                              cyclesToTicks(stall_recycle_lat));
     } else {
+      storSnpTBEs.incrementReserved();
       peek(c2cRxSnpInPort, CHIRequestMsg) {
-        // Phase 1: stateless snoop forwarding (no TBE needed)
-        trigger(Event:InSnp_Deliver, in_msg.addr, TBEs[in_msg.addr]);
+        trigger(Event:InSnp_Deliver, in_msg.addr,
+                snpTBEs[in_msg.addr]);
       }
     }
   }

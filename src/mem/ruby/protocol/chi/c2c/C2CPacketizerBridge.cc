@@ -65,8 +65,16 @@ C2CPacketizerBridge::init()
     for (int i = 0; i < NUM_CHANNELS; i++) {
         inBuf[i]->setConsumer(this);
     }
+}
 
-    // Look up credit managers via the static registry
+void
+C2CPacketizerBridge::startup()
+{
+    ClockedObject::startup();
+
+    // Look up credit managers via the static registry.
+    // This runs in startup() (after all init() calls) because the
+    // SLICC-generated controller creates its C2CCreditManager in init().
     txCreditMgr = C2CCreditManager::lookup(params().tx_controller);
     rxCreditMgr = C2CCreditManager::lookup(params().rx_controller);
     panic_if(!txCreditMgr, "%s: no C2CCreditManager for tx_controller",

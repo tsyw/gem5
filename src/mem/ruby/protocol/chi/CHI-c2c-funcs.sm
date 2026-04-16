@@ -383,4 +383,10 @@ void clearTBEDefaults(TBE tbe) {
   tbe.usedSharedCredit := false;
   tbe.rxtxBytes := 0;
   tbe.pendingSnpResps := 0;
+  tbe.compAckDone := false;
+}
+
+// Check if all data flits for a cache line have been forwarded
+bool allDataFlitsForwarded(TBE tbe) {
+  return tbe.rxtxBytes >= blockSize;
 }

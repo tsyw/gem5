@@ -587,12 +587,20 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   }
 
   // Directory entry
+  // dir_sharers holds actual RN MachineIDs (both local and remote).
+  // c2cRemoteSharers is the subset behind C2CGs; c2cGateways is a
+  // parallel set of C2CG MachineIDs that route to them.  When
+  // snooping, remote sharers in Destination are replaced by their
+  // gateways and rmtDest is set.
   structure(DirEntry, interface="AbstractCacheEntry", main="false") {
     NetDest sharers,   desc="All upstream controllers that have this line (includes ownwer)";
     MachineID owner,   desc="Controller that has the line in UD,UC, or SD state";
     bool ownerExists, default="false", desc="true if owner exists";
     bool ownerIsExcl, default="false", desc="true if owner is UD or UC";
     State state,       desc="SLICC line state";
+    // C2C remote sharer tracking
+    NetDest c2cRemoteSharers, desc="Subset of sharers that are behind C2CGs";
+    NetDest c2cGateways,      desc="C2CGs that proxy for c2cRemoteSharers";
   }
 
   // Helper class for tracking expected response and data messages
@@ -660,6 +668,9 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool ns,                desc="Secure State of the transaction. NS=NonSecure", default="true";
     MachineID requestor,    desc="Requestor ID";
     MachineID fwdRequestor, desc="Requestor to receive data on fwding snoops";
+    // C2C: remote sharer info from incoming C2CG request (paper Fig.4)
+    bool reqHasRmtDest,     default="false", desc="Request came from C2CG with remote RN";
+    NetDest reqRmtDest,     desc="Actual remote RNs behind the C2CG requestor";
     bool use_DMT,           desc="Use DMT for this transaction";
     bool use_DCT,           desc="Use DCT for this transaction";
 
@@ -703,6 +714,9 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     MachineID dir_owner,          desc="Owner ID";
     bool dir_ownerExists,         desc="Owner ID is valid";
     bool dir_ownerIsExcl,         desc="Owner is UD or UC; SD otherwise";
+    // C2C remote sharer tracking
+    NetDest dir_c2cRemoteSharers, desc="Subset of dir_sharers behind C2CGs";
+    NetDest dir_c2cGateways,      desc="C2CGs that proxy for remote sharers";
     bool doCacheFill,             desc="Write valid data to the cache when completing transaction";
     // NOTE: dataMaybeDirtyUpstream and dir_ownerExists are the same except
     // when we had just sent dirty data upstream and are waiting for ack to set

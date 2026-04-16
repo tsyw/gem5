@@ -42,34 +42,35 @@ Address space split:
 
 Each RNF routes all requests to both local HNF and C2CG.
 The C2CG forwards remote-addressed requests across the link.
-
-NOTE: This config is a scaffold for T-020 integration tests.
-It requires packetizer integration (T-017) before the C2C link
-can carry actual coherent traffic.
 """
 
-import argparse
 import os
-import sys
 
 import m5
-from m5.defines import buildEnv
 from m5.objects import *
 from m5.util import addToPath
 
-m5.util.addToPath(os.path.join(m5.util.repoPath(), "configs"))
-from common import Options
-from ruby import Ruby
+_configs = os.path.join(m5.util.repoPath(), "configs")
+if not os.path.isdir(os.path.join(_configs, "ruby")):
+    _src = os.environ.get("THIRD_PARTY_GEM5_SRCS_HOME", "")
+    if _src:
+        _configs = os.path.join(_src, "configs")
+addToPath(_configs)
+# CHI_C2C_config uses bare "from CHI_config import ..." so ruby/ must
+# also be on the path.
+addToPath(os.path.join(_configs, "ruby"))
 from ruby.CHI_config import (
     CHI_HNF,
     CHI_MN,
     CHI_RNF,
     CHI_SNF_MainMem,
+    L1DCache,
+    L1ICache,
+    L2Cache,
     NoC_Params,
     Versions,
 )
 
-# Conditional import — C2C classes may not be available in all builds
 try:
     from ruby.CHI_C2C_config import (
         CHI_C2CG,
@@ -80,22 +81,84 @@ except ImportError:
     wireC2CLink = None
 
 
+def _build_chip(
+    cpu,
+    ruby_system,
+    l1i_type,
+    l1d_type,
+    l2_type,
+    cache_line_size,
+    hnf_cache_cls,
+    addr_range,
+    remote_range,
+    full_range,
+    interleave_idx,
+):
+    """Build one chip's worth of CHI nodes."""
+    rnf = CHI_RNF(
+        [cpu],
+        ruby_system,
+        l1i_type,
+        l1d_type,
+        cache_line_size,
+    )
+    rnf.addPrivL2Cache(l2_type)
+
+    CHI_HNF.createAddrRanges([addr_range], cache_line_size, [interleave_idx])
+    hnf = CHI_HNF(interleave_idx, ruby_system, hnf_cache_cls, None)
+
+    snf = CHI_SNF_MainMem(ruby_system, None, None)
+
+    mn = CHI_MN(ruby_system, rnf.getAllControllers())
+
+    c2cg = CHI_C2CG(ruby_system, [remote_range])
+
+    network_nodes = [rnf, hnf, snf, mn, c2cg]
+    all_cntrls = []
+    network_cntrls = []
+    for node in network_nodes:
+        all_cntrls.extend(node.getAllControllers())
+        network_cntrls.extend(node.getNetworkSideControllers())
+
+    return (
+        rnf,
+        hnf,
+        snf,
+        mn,
+        c2cg,
+        network_nodes,
+        all_cntrls,
+        network_cntrls,
+        rnf.getSequencers(),
+        snf.getAllControllers(),
+    )
+
+
 def build_two_chip_system(
     ruby_system,
     system,
     options,
+    cpus,
     chip0_range=None,
     chip1_range=None,
 ):
     """
     Build a two-chip CHI system with C2C gateways.
 
+    Args:
+        ruby_system: The RubySystem object
+        system: The System object
+        options: Parsed command-line options
+        cpus: List of 2 SimObjects to serve as CPU parents
+        chip0_range: Address range for chip 0 (default: lower 2 GiB)
+        chip1_range: Address range for chip 1 (default: upper 2 GiB)
+
     Returns:
         (network_nodes, network_cntrls, all_cntrls,
          cpu_sequencers, mem_cntrls, c2cg_pair)
     """
     if CHI_C2CG is None:
-        m5.fatal("CHI C2C config classes not available in this build")
+        m5.fatal("CHI C2C config classes not available")
 
     if chip0_range is None:
         chip0_range = AddrRange(0, size="2GiB")
@@ -112,114 +175,83 @@ def build_two_chip_system(
         size = "256KiB"
         assoc = 8
 
+    l1i_type = L1ICache(size=options.l1i_size, assoc=options.l1i_assoc)
+    l1d_type = L1DCache(size=options.l1d_size, assoc=options.l1d_assoc)
+    l2_type = L2Cache(size=options.l2_size, assoc=options.l2_assoc)
+
+    chip_args = [
+        (cpus[0], chip0_range, chip1_range, 0),
+        (cpus[1], chip1_range, chip0_range, 1),
+    ]
+
     network_nodes = []
     network_cntrls = []
     all_cntrls = []
     cpu_sequencers = []
     mem_cntrls = []
+    rnfs = []
+    hnfs = []
+    snfs = []
+    mns = []
+    c2cgs = []
 
-    # --- Chip 0 ---
-    rnf0 = CHI_RNF(
-        system.cpu[0],
-        ruby_system,
-        options.l1i_size,
-        options.l1d_size,
-        options.l2_size,
-        None,
-    )
-    cpu_sequencers.extend(rnf0.getSequencers())
-    all_cntrls.extend(rnf0.getAllControllers())
-    network_nodes.append(rnf0)
-    network_cntrls.extend(rnf0.getNetworkSideControllers())
+    for cpu, addr_range, remote_range, idx in chip_args:
+        (
+            rnf,
+            hnf,
+            snf,
+            mn,
+            c2cg,
+            nodes,
+            cntrls,
+            net_cntrls,
+            seqs,
+            snf_cntrls,
+        ) = _build_chip(
+            cpu,
+            ruby_system,
+            l1i_type,
+            l1d_type,
+            l2_type,
+            cache_line_size,
+            HNFCache,
+            addr_range,
+            remote_range,
+            full_range,
+            idx,
+        )
+        network_nodes.extend(nodes)
+        network_cntrls.extend(net_cntrls)
+        all_cntrls.extend(cntrls)
+        cpu_sequencers.extend(seqs)
+        mem_cntrls.extend(snf_cntrls)
+        rnfs.append(rnf)
+        hnfs.append(hnf)
+        snfs.append(snf)
+        mns.append(mn)
+        c2cgs.append(c2cg)
 
-    CHI_HNF.createAddrRanges([chip0_range], cache_line_size, [0])
-    hnf0 = CHI_HNF(0, ruby_system, HNFCache, None)
-    all_cntrls.extend(hnf0.getAllControllers())
-    network_nodes.append(hnf0)
-    network_cntrls.extend(hnf0.getNetworkSideControllers())
+    # Parent all nodes under ruby_system so SimObject hierarchy resolves
+    ruby_system.rnf = rnfs
+    ruby_system.hnf = hnfs
+    ruby_system.snf = snfs
+    ruby_system.mn = mns
+    ruby_system.c2cg = c2cgs
 
-    snf0 = CHI_SNF_MainMem(ruby_system, None, None)
-    all_cntrls.extend(snf0.getAllControllers())
-    network_nodes.append(snf0)
-    network_cntrls.extend(snf0.getNetworkSideControllers())
-    mem_cntrls.extend(snf0.getAllControllers())
-
-    all_rnf0 = rnf0.getAllControllers()
-    mn0 = CHI_MN(ruby_system, all_rnf0)
-    all_cntrls.extend(mn0.getAllControllers())
-    network_nodes.append(mn0)
-    network_cntrls.extend(mn0.getNetworkSideControllers())
-
-    c2cg0 = CHI_C2CG(ruby_system, full_range)
-    all_cntrls.extend(c2cg0.getAllControllers())
-    network_nodes.append(c2cg0)
-    network_cntrls.extend(c2cg0.getNetworkSideControllers())
-
-    # --- Chip 1 ---
-    rnf1 = CHI_RNF(
-        system.cpu[1],
-        ruby_system,
-        options.l1i_size,
-        options.l1d_size,
-        options.l2_size,
-        None,
-    )
-    cpu_sequencers.extend(rnf1.getSequencers())
-    all_cntrls.extend(rnf1.getAllControllers())
-    network_nodes.append(rnf1)
-    network_cntrls.extend(rnf1.getNetworkSideControllers())
-
-    CHI_HNF.createAddrRanges([chip1_range], cache_line_size, [1])
-    hnf1 = CHI_HNF(1, ruby_system, HNFCache, None)
-    all_cntrls.extend(hnf1.getAllControllers())
-    network_nodes.append(hnf1)
-    network_cntrls.extend(hnf1.getNetworkSideControllers())
-
-    snf1 = CHI_SNF_MainMem(ruby_system, None, None)
-    all_cntrls.extend(snf1.getAllControllers())
-    network_nodes.append(snf1)
-    network_cntrls.extend(snf1.getNetworkSideControllers())
-    mem_cntrls.extend(snf1.getAllControllers())
-
-    all_rnf1 = rnf1.getAllControllers()
-    mn1 = CHI_MN(ruby_system, all_rnf1)
-    all_cntrls.extend(mn1.getAllControllers())
-    network_nodes.append(mn1)
-    network_cntrls.extend(mn1.getNetworkSideControllers())
-
-    c2cg1 = CHI_C2CG(ruby_system, full_range)
-    all_cntrls.extend(c2cg1.getAllControllers())
-    network_nodes.append(c2cg1)
-    network_cntrls.extend(c2cg1.getNetworkSideControllers())
-
-    # --- Wire C2C link ---
-    bridges = wireC2CLink(c2cg0, c2cg1, ruby_system)
+    # Wire C2C link
+    bridges = wireC2CLink(c2cgs[0], c2cgs[1], ruby_system)
     if bridges is not None:
         system.c2c_bridge_a2b = bridges[0]
         system.c2c_bridge_b2a = bridges[1]
 
-    # --- Downstream routing ---
-    hnf0_cntrls = hnf0.getAllControllers()
-    hnf1_cntrls = hnf1.getAllControllers()
-    c2cg0_cntrls = c2cg0.getAllControllers()
-    c2cg1_cntrls = c2cg1.getAllControllers()
-    snf0_cntrls = snf0.getAllControllers()
-    snf1_cntrls = snf1.getAllControllers()
-
-    # RNFs route to local HNF + local C2CG
-    rnf0.setDownstream(hnf0_cntrls + c2cg0_cntrls)
-    rnf1.setDownstream(hnf1_cntrls + c2cg1_cntrls)
-
-    # HNFs route to local SNF
-    hnf0.setDownstream(snf0_cntrls)
-    hnf1.setDownstream(snf1_cntrls)
-
-    # Store on ruby_system for test access
-    ruby_system.rnf = [rnf0, rnf1]
-    ruby_system.hnf = [hnf0, hnf1]
-    ruby_system.snf = [snf0, snf1]
-    ruby_system.mn = [mn0, mn1]
-    ruby_system.c2cg = [c2cg0, c2cg1]
+    # Downstream routing
+    for i in range(2):
+        rnfs[i].setDownstream(
+            hnfs[i].getAllControllers() + c2cgs[i].getAllControllers()
+        )
+        hnfs[i].setDownstream(snfs[i].getAllControllers())
+        # C2CG forwards inbound remote requests to the local HNF
+        c2cgs[i].setDownstream(hnfs[i].getAllControllers())
 
     # Data message size
     for cntrl in all_cntrls:
@@ -232,15 +264,11 @@ def build_two_chip_system(
     if hasattr(options, "network") and options.network == "simple":
         ruby_system.network.buffer_size = params.router_buffer_size
 
-    for k in dir(params):
-        if not k.startswith("__"):
-            setattr(options, k, getattr(params, k))
-
     return (
         network_nodes,
         network_cntrls,
         all_cntrls,
         cpu_sequencers,
         mem_cntrls,
-        (c2cg0, c2cg1),
+        (c2cgs[0], c2cgs[1]),
     )

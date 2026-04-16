@@ -328,23 +328,39 @@ in_port(reqRdyPort, CHIRequestMsg, reqRdy, rank=3,
             trigger(Event:WriteBackFull_Stale, in_msg.addr, cache_entry, tbe);
           }
         } else if (in_msg.type == CHIRequestType:WriteEvictFull) {
+          MachineID req_for_dir := in_msg.requestor;
+          if (in_msg.hasRmtDest) {
+            req_for_dir := in_msg.rmtDest.smallestElement();
+          }
           if (is_invalid(dir_entry) || (dir_entry.ownerExists == false) ||
-              (dir_entry.ownerIsExcl == false) || (dir_entry.owner != in_msg.requestor)) {
+              (dir_entry.ownerIsExcl == false) || (dir_entry.owner != req_for_dir)) {
             trigger(Event:WriteEvictFull_Stale, in_msg.addr, cache_entry, tbe);
           }
         } else if (in_msg.type == CHIRequestType:WriteCleanFull) {
+          MachineID req_for_dir := in_msg.requestor;
+          if (in_msg.hasRmtDest) {
+            req_for_dir := in_msg.rmtDest.smallestElement();
+          }
           if (is_invalid(dir_entry) || (dir_entry.ownerExists == false) ||
-              (dir_entry.owner != in_msg.requestor)) {
+              (dir_entry.owner != req_for_dir)) {
             trigger(Event:WriteCleanFull_Stale, in_msg.addr, cache_entry, tbe);
           }
         } else if (in_msg.type == CHIRequestType:Evict) {
           if (is_invalid(dir_entry) ||
-              (dir_entry.sharers.isElement(in_msg.requestor) == false)) {
+              (in_msg.hasRmtDest &&
+               dir_entry.sharers.isElement(
+                 in_msg.rmtDest.smallestElement()) == false) ||
+              (in_msg.hasRmtDest == false &&
+               dir_entry.sharers.isElement(in_msg.requestor) == false)) {
             trigger(Event:Evict_Stale, in_msg.addr, cache_entry, tbe);
           }
         } else if (in_msg.type == CHIRequestType:CleanUnique) {
           if (is_invalid(dir_entry) ||
-              (dir_entry.sharers.isElement(in_msg.requestor) == false)) {
+              (in_msg.hasRmtDest &&
+               dir_entry.sharers.isElement(
+                 in_msg.rmtDest.smallestElement()) == false) ||
+              (in_msg.hasRmtDest == false &&
+               dir_entry.sharers.isElement(in_msg.requestor) == false)) {
             trigger(Event:CleanUnique_Stale, in_msg.addr, cache_entry, tbe);
           }
         }

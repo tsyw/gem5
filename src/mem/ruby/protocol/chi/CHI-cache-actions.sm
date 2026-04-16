@@ -692,7 +692,7 @@ action(Initiate_ReadUnique_HitUpstream, desc="") {
   // SnpUniqueFwd can be used only if the line is cached at a single
   // requester; so force it off if that's the case
   tbe.use_DCT := tbe.use_DCT && (tbe.dir_sharers.count() == 1) &&
-                 (tbe.dir_sharers.isElement(tbe.requestor) == false);
+                 (isRequestorInSharers(tbe) == false);
   if (tbe.use_DCT) {
     tbe.actions.push(Event:SendSnpUniqueFwd);
     tbe.actions.pushNB(Event:WaitCompAck);
@@ -737,7 +737,7 @@ action(Finish_MakeReadUnique, desc="") {
   // Choosing whether to send or not data back (CompData vs Comp)
   // to the requestor. Data will be forwarded if the requestor
   // lost the cacheline while the transaction was in progress
-  if (tbe.dataValid && tbe.dir_sharers.isElement(tbe.requestor) == false) {
+  if (tbe.dataValid && isRequestorInSharers(tbe) == false) {
     tbe.actions.pushNB(Event:SendCompData);
   } else {
     if (tbe.dataDirty) {
@@ -788,7 +788,7 @@ action(Finish_CleanUnique, desc="") {
   assert(tbe.actions.empty());
 
   // everyone may have been hit by an invalidation so check again
-  if (tbe.dir_sharers.isElement(tbe.requestor) == false) {
+  if (isRequestorInSharers(tbe) == false) {
     tbe.updateDirOnCompAck := false;
     assert(tbe.dataValid == false);
     assert(tbe.is_stale);
@@ -1326,7 +1326,8 @@ action(Initiate_CopyBack_Stale, desc="") {
     tbe.actions.push(Event:FinishCopyBack_Stale);
   }
 
-  assert((tbe.dir_ownerExists == false) || (tbe.dir_owner != tbe.requestor));
+  assert((tbe.dir_ownerExists == false) ||
+         (tbe.dir_owner != getRequestorForDir(tbe)));
 }
 
 action(Finish_CopyBack_Stale, desc="") {
@@ -1857,6 +1858,7 @@ action(Send_SnpCleanInvalid, desc="") {
   enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
     prepareRequest(tbe, CHIRequestType:SnpCleanInvalid, out_msg);
     out_msg.Destination.addNetDest(tbe.dir_sharers);
+    fixupC2CSnpDest(tbe, out_msg);
     out_msg.retToSrc := false;
     out_msg.ns := tbe.ns;
   }
@@ -1869,7 +1871,22 @@ action(Send_SnpCleanInvalid_NoReq, desc="") {
   enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
     prepareRequest(tbe, CHIRequestType:SnpCleanInvalid, out_msg);
     out_msg.Destination.addNetDest(tbe.dir_sharers);
-    out_msg.Destination.remove(tbe.requestor);
+    // C2C: remove actual requestor (remote RN or local) from sharers
+    if (tbe.reqHasRmtDest) {
+      out_msg.Destination.removeNetDest(tbe.reqRmtDest);
+    } else {
+      out_msg.Destination.remove(tbe.requestor);
+    }
+    fixupC2CSnpDest(tbe, out_msg);
+    // C2C fixup: also remove actual requestor from rmtDest
+    if (tbe.reqHasRmtDest && out_msg.hasRmtDest) {
+      out_msg.rmtDest.removeNetDest(tbe.reqRmtDest);
+      if (out_msg.rmtDest.count() == 0) {
+        out_msg.hasRmtDest := false;
+        // No remote targets left — remove gateways from Destination
+        out_msg.Destination.removeNetDest(tbe.dir_c2cGateways);
+      }
+    }
     // at least one sharer other than requestor
     assert(out_msg.Destination.count() > 0);
     out_msg.retToSrc := false;
@@ -1889,6 +1906,7 @@ action(Send_SnpUnique, desc="") {
   enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
     prepareRequest(tbe, CHIRequestType:SnpUnique, out_msg);
     out_msg.Destination.addNetDest(tbe.dir_sharers);
+    fixupC2CSnpDest(tbe, out_msg);
     out_msg.retToSrc := false;
     out_msg.ns := tbe.ns;
   }
@@ -1911,6 +1929,7 @@ action(Send_SnpUnique_RetToSrc, desc="") {
   enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
     prepareRequest(tbe, CHIRequestType:SnpUnique, out_msg);
     out_msg.Destination.add(dest);
+    fixupC2CSingleSnpDest(tbe, out_msg, dest);
     out_msg.retToSrc := true;
     out_msg.ns := tbe.ns;
   }
@@ -1920,6 +1939,11 @@ action(Send_SnpUnique_RetToSrc, desc="") {
       prepareRequest(tbe, CHIRequestType:SnpUnique, out_msg);
       out_msg.Destination.addNetDest(tbe.dir_sharers);
       out_msg.Destination.remove(dest);
+      fixupC2CSnpDest(tbe, out_msg);
+      // Remove dest from rmtDest since it was already handled above
+      if (out_msg.hasRmtDest) {
+        out_msg.rmtDest.remove(dest);
+      }
       out_msg.retToSrc := false;
       out_msg.ns := tbe.ns;
     }
@@ -1940,6 +1964,7 @@ action(Send_SnpUniqueFwd, desc="") {
   enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
     prepareRequest(tbe, CHIRequestType:SnpUniqueFwd, out_msg);
     out_msg.Destination.addNetDest(tbe.dir_sharers);
+    fixupC2CSnpDest(tbe, out_msg);
     out_msg.retToSrc := false;
     out_msg.ns := tbe.ns;
   }
@@ -1962,6 +1987,7 @@ action(Send_SnpShared, desc="") {
   enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
     prepareRequest(tbe, CHIRequestType:SnpShared, out_msg);
     out_msg.Destination.add(tbe.dir_owner);
+    fixupC2CSingleSnpDest(tbe, out_msg, tbe.dir_owner);
     out_msg.retToSrc := false;
     out_msg.ns := tbe.ns;
   }
@@ -2014,6 +2040,7 @@ action(Send_SnpSharedFwd_ToOwner, desc="") {
       prepareRequest(tbe, CHIRequestType:SnpNotSharedDirtyFwd, out_msg);
     }
     out_msg.Destination.add(tbe.dir_owner);
+    fixupC2CSingleSnpDest(tbe, out_msg, tbe.dir_owner);
     out_msg.retToSrc := retToSrc;
     out_msg.ns := tbe.ns;
   }
@@ -2042,7 +2069,9 @@ action(Send_SnpSharedFwd_ToSharer, desc="") {
   enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
     prepareRequest(tbe, CHIRequestType:SnpSharedFwd, out_msg);
     // TODO should be random or the closest one to the fwd dest
-    out_msg.Destination.add(tbe.dir_sharers.smallestElement());
+    MachineID target := tbe.dir_sharers.smallestElement();
+    out_msg.Destination.add(target);
+    fixupC2CSingleSnpDest(tbe, out_msg, target);
     out_msg.retToSrc := retToSrc;
     out_msg.ns := tbe.ns;
   }
@@ -2071,12 +2100,15 @@ action(Send_SnpOnce, desc="") {
 
   enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
     prepareRequest(tbe, CHIRequestType:SnpOnce, out_msg);
+    MachineID target;
     if (tbe.dir_ownerExists) {
-      out_msg.Destination.add(tbe.dir_owner);
+      target := tbe.dir_owner;
     } else {
       // TODO should be random or the closest one
-      out_msg.Destination.add(tbe.dir_sharers.smallestElement());
+      target := tbe.dir_sharers.smallestElement();
     }
+    out_msg.Destination.add(target);
+    fixupC2CSingleSnpDest(tbe, out_msg, target);
     out_msg.retToSrc := true;
     out_msg.ns := tbe.ns;
   }
@@ -2105,12 +2137,15 @@ action(Send_SnpOnceFwd, desc="") {
 
   enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
     prepareRequest(tbe, CHIRequestType:SnpOnceFwd, out_msg);
+    MachineID target;
     if (tbe.dir_ownerExists) {
-      out_msg.Destination.add(tbe.dir_owner);
+      target := tbe.dir_owner;
     } else {
       // TODO should be random or the closest one
-      out_msg.Destination.add(tbe.dir_sharers.smallestElement());
+      target := tbe.dir_sharers.smallestElement();
     }
+    out_msg.Destination.add(target);
+    fixupC2CSingleSnpDest(tbe, out_msg, target);
     out_msg.retToSrc := false;
     out_msg.ns := tbe.ns;
   }
@@ -2356,11 +2391,11 @@ action(UpdateDirState_FromSnpDataResp, desc="") {
             (in_msg.type == CHIDataType:SnpRespData_SC_PD_Fwded_SC) ||
             (in_msg.type == CHIDataType:SnpRespData_SC_Fwded_SD_PD) ||
             (in_msg.type == CHIDataType:SnpRespData_SD_Fwded_SC)) {
-          tbe.dir_sharers.add(tbe.requestor);
+          addRequestorToSharers(tbe);
         }
         if (in_msg.type == CHIDataType:SnpRespData_SC_Fwded_SD_PD) {
           tbe.dir_ownerExists := true;
-          tbe.dir_owner := tbe.requestor;
+          tbe.dir_owner := getRequestorForDir(tbe);
         } else if (in_msg.type == CHIDataType:SnpRespData_SD_Fwded_SC) {
           tbe.dir_ownerExists := true;
           tbe.dir_owner := in_msg.responder;
@@ -2376,10 +2411,10 @@ action(UpdateDirState_FromSnpDataResp, desc="") {
         tbe.dir_ownerExists := false;
         tbe.dir_ownerIsExcl := false;
         tbe.dir_sharers.remove(in_msg.responder);
-        tbe.dir_sharers.add(tbe.requestor);
+        addRequestorToSharers(tbe);
         if (in_msg.type == CHIDataType:SnpRespData_I_Fwded_SD_PD) {
           tbe.dir_ownerExists := true;
-          tbe.dir_owner := tbe.requestor;
+          tbe.dir_owner := getRequestorForDir(tbe);
         }
 
       } else if ((in_msg.type == CHIDataType:SnpRespData_SD) ||
@@ -2584,16 +2619,30 @@ action(UpdateDataState_FromSnpDataResp, desc="") {
 
 action(UpdateDirState_FromReqResp, desc="") {
   peek(rspInPort, CHIResponseMsg) {
+    DPRINTF(RubySlicc, "UpdateDirState_FromReqResp: type=%s updateDirOnCompAck=%d reqHasRmt=%d\n",
+            in_msg.type, tbe.updateDirOnCompAck, tbe.reqHasRmtDest);
     if ((in_msg.type == CHIResponseType:CompAck) && tbe.updateDirOnCompAck) {
       assert(tbe.requestor == in_msg.responder);
 
-      tbe.dir_sharers.add(in_msg.responder);
+      // C2C: add actual remote RN to dir_sharers (not the C2CG proxy)
+      if (tbe.reqHasRmtDest) {
+        tbe.dir_sharers.addNetDest(tbe.reqRmtDest);
+        tbe.dir_c2cRemoteSharers.addNetDest(tbe.reqRmtDest);
+        tbe.dir_c2cGateways.add(in_msg.responder);
+      } else {
+        tbe.dir_sharers.add(in_msg.responder);
+      }
 
       if (tbe.requestorToBeOwner) {
         assert(tbe.dataMaybeDirtyUpstream);
         assert(tbe.dir_ownerExists == false);
         assert(tbe.requestorToBeExclusiveOwner == false);
-        tbe.dir_owner := in_msg.responder;
+        // C2C: owner is actual remote RN, not the C2CG proxy
+        if (tbe.reqHasRmtDest) {
+          tbe.dir_owner := tbe.reqRmtDest.smallestElement();
+        } else {
+          tbe.dir_owner := in_msg.responder;
+        }
         tbe.dir_ownerExists := true;
         tbe.dir_ownerIsExcl := false;
 
@@ -2601,7 +2650,11 @@ action(UpdateDirState_FromReqResp, desc="") {
         assert(tbe.dataMaybeDirtyUpstream);
         assert(tbe.dir_ownerExists == false);
         assert(tbe.dir_sharers.count() == 1);
-        tbe.dir_owner := in_msg.responder;
+        if (tbe.reqHasRmtDest) {
+          tbe.dir_owner := tbe.reqRmtDest.smallestElement();
+        } else {
+          tbe.dir_owner := in_msg.responder;
+        }
         tbe.dir_ownerExists := true;
         tbe.dir_ownerIsExcl := true;
       }
@@ -2614,11 +2667,19 @@ action(UpdateDirState_FromSnpResp, desc="") {
   peek(rspInPort, CHIResponseMsg) {
 
     if (in_msg.type == CHIResponseType:SnpResp_I) {
-      // must have been a known sharer otherwise we would receive data
-      assert(tbe.dir_sharers.isElement(in_msg.responder));
-      tbe.dir_sharers.remove(in_msg.responder);
-      if (tbe.dir_ownerExists && (tbe.dir_owner == in_msg.responder)){
-        tbe.dir_ownerExists := false;
+      // C2C: if responder is a C2CG gateway, remove the remote sharers
+      // it proxied for instead of the responder itself.
+      if (tbe.dir_c2cGateways.isElement(in_msg.responder)) {
+        tbe.dir_sharers.removeNetDest(tbe.dir_c2cRemoteSharers);
+        tbe.dir_c2cRemoteSharers.clear();
+        tbe.dir_c2cGateways.remove(in_msg.responder);
+      } else {
+        // Local sharer: must be a known sharer
+        assert(tbe.dir_sharers.isElement(in_msg.responder));
+        tbe.dir_sharers.remove(in_msg.responder);
+        if (tbe.dir_ownerExists && (tbe.dir_owner == in_msg.responder)){
+          tbe.dir_ownerExists := false;
+        }
       }
 
     } else if (in_msg.type == CHIResponseType:SnpResp_SC) {
@@ -2634,11 +2695,11 @@ action(UpdateDirState_FromSnpResp, desc="") {
       assert(tbe.dir_sharers.isElement(in_msg.responder));
       tbe.dir_ownerExists := false;
       tbe.dir_ownerIsExcl := false;
-      tbe.dir_sharers.add(tbe.requestor);
+      addRequestorToSharers(tbe);
       if (in_msg.type == CHIResponseType:SnpResp_SC_Fwded_SD_PD) {
         // Requestor is new owner
         tbe.dir_ownerExists := true;
-        tbe.dir_owner := tbe.requestor;
+        tbe.dir_owner := getRequestorForDir(tbe);
       }
 
     } else if ((in_msg.type == CHIResponseType:SnpResp_I_Fwded_UC) ||
@@ -2648,10 +2709,10 @@ action(UpdateDirState_FromSnpResp, desc="") {
       assert(tbe.dir_sharers.count() == 1);
       tbe.dir_sharers.remove(in_msg.responder);
       // requestor is the new owner
-      tbe.dir_sharers.add(tbe.requestor);
+      addRequestorToSharers(tbe);
       tbe.dir_ownerExists := true;
       tbe.dir_ownerIsExcl := true;
-      tbe.dir_owner := tbe.requestor;
+      tbe.dir_owner := getRequestorForDir(tbe);
 
     } else if ((in_msg.type == CHIResponseType:SnpResp_UC_Fwded_I) ||
                (in_msg.type == CHIResponseType:SnpResp_UD_Fwded_I) ||
@@ -3173,10 +3234,11 @@ action(Send_CompI, desc="") {
 
   if (!isStashReqType(tbe.reqType)) {
     // Used to ack Evict request
-    assert(tbe.dir_sharers.isElement(tbe.requestor));
-    assert((tbe.dir_ownerExists == false) || (tbe.dir_owner != tbe.requestor));
+    assert(isRequestorInSharers(tbe));
+    assert((tbe.dir_ownerExists == false) ||
+           (tbe.dir_owner != getRequestorForDir(tbe)));
 
-    tbe.dir_sharers.remove(tbe.requestor);
+    removeRequestorFromSharers(tbe);
   }
 
   enqueue(rspOutPort, CHIResponseMsg, response_latency) {
@@ -3402,7 +3464,7 @@ action(CheckUpgrade_FromCU, desc="") {
   assert(is_HN == false);
   if (tbe.dataUnique == false) {
     // actually failed, so just cancel the directory update
-    assert(tbe.dir_sharers.isElement(tbe.requestor) == false);
+    assert(isRequestorInSharers(tbe) == false);
     tbe.requestorToBeExclusiveOwner := false;
     tbe.updateDirOnCompAck := false;
   }
@@ -3449,6 +3511,8 @@ action(Finalize_UpdateDirectoryFromTBE, desc="") {
     dir_entry.ownerIsExcl := tbe.dir_ownerIsExcl;
     dir_entry.owner := tbe.dir_owner;
     dir_entry.sharers := tbe.dir_sharers;
+    dir_entry.c2cRemoteSharers := tbe.dir_c2cRemoteSharers;
+    dir_entry.c2cGateways := tbe.dir_c2cGateways;
   } else {
     assert((tbe.dir_ownerExists == false) && tbe.dir_sharers.isEmpty());
     if(directory.isTagPresent(address)) {
