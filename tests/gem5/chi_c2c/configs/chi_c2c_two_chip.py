@@ -28,7 +28,7 @@
 Two-chip CHI C2C test configuration.
 
 Creates two CHI sub-systems (Chip 0 and Chip 1), each with:
-  - 1 RNF (request node with L1/L2 caches)
+  - N RNFs (request nodes with L1/L2 caches, default 1)
   - 1 HNF (home node with L3 cache)
   - 1 SNF (memory controller)
   - 1 MN  (misc node for DVM)
@@ -82,7 +82,7 @@ except ImportError:
 
 
 def _build_chip(
-    cpu,
+    cpus,
     ruby_system,
     l1i_type,
     l1d_type,
@@ -94,26 +94,37 @@ def _build_chip(
     full_range,
     interleave_idx,
 ):
-    """Build one chip's worth of CHI nodes."""
-    rnf = CHI_RNF(
-        [cpu],
-        ruby_system,
-        l1i_type,
-        l1d_type,
-        cache_line_size,
-    )
-    rnf.addPrivL2Cache(l2_type)
+    """Build one chip's worth of CHI nodes.
+
+    Args:
+        cpus: list of SimObjects to serve as CPU parents (1 RNF each)
+    """
+    rnfs = []
+    all_rnf_cntrls = []
+    sequencers = []
+    for cpu in cpus:
+        rnf = CHI_RNF(
+            [cpu],
+            ruby_system,
+            l1i_type,
+            l1d_type,
+            cache_line_size,
+        )
+        rnf.addPrivL2Cache(l2_type)
+        rnfs.append(rnf)
+        all_rnf_cntrls.extend(rnf.getAllControllers())
+        sequencers.extend(rnf.getSequencers())
 
     CHI_HNF.createAddrRanges([addr_range], cache_line_size, [interleave_idx])
     hnf = CHI_HNF(interleave_idx, ruby_system, hnf_cache_cls, None)
 
     snf = CHI_SNF_MainMem(ruby_system, None, None)
 
-    mn = CHI_MN(ruby_system, rnf.getAllControllers())
+    mn = CHI_MN(ruby_system, all_rnf_cntrls)
 
     c2cg = CHI_C2CG(ruby_system, [remote_range])
 
-    network_nodes = [rnf, hnf, snf, mn, c2cg]
+    network_nodes = list(rnfs) + [hnf, snf, mn, c2cg]
     all_cntrls = []
     network_cntrls = []
     for node in network_nodes:
@@ -121,7 +132,7 @@ def _build_chip(
         network_cntrls.extend(node.getNetworkSideControllers())
 
     return (
-        rnf,
+        rnfs,
         hnf,
         snf,
         mn,
@@ -129,7 +140,7 @@ def _build_chip(
         network_nodes,
         all_cntrls,
         network_cntrls,
-        rnf.getSequencers(),
+        sequencers,
         snf.getAllControllers(),
     )
 
@@ -149,7 +160,9 @@ def build_two_chip_system(
         ruby_system: The RubySystem object
         system: The System object
         options: Parsed command-line options
-        cpus: List of 2 SimObjects to serve as CPU parents
+        cpus: List of SimObjects to serve as CPU parents.
+              Split evenly between chips (first half -> chip 0,
+              second half -> chip 1). Must have even length.
         chip0_range: Address range for chip 0 (default: lower 2 GiB)
         chip1_range: Address range for chip 1 (default: upper 2 GiB)
 
@@ -179,9 +192,10 @@ def build_two_chip_system(
     l1d_type = L1DCache(size=options.l1d_size, assoc=options.l1d_assoc)
     l2_type = L2Cache(size=options.l2_size, assoc=options.l2_assoc)
 
+    cpus_per_chip = len(cpus) // 2
     chip_args = [
-        (cpus[0], chip0_range, chip1_range, 0),
-        (cpus[1], chip1_range, chip0_range, 1),
+        (cpus[:cpus_per_chip], chip0_range, chip1_range, 0),
+        (cpus[cpus_per_chip:], chip1_range, chip0_range, 1),
     ]
 
     network_nodes = []
@@ -195,9 +209,9 @@ def build_two_chip_system(
     mns = []
     c2cgs = []
 
-    for cpu, addr_range, remote_range, idx in chip_args:
+    for chip_cpus, addr_range, remote_range, idx in chip_args:
         (
-            rnf,
+            chip_rnfs,
             hnf,
             snf,
             mn,
@@ -208,7 +222,7 @@ def build_two_chip_system(
             seqs,
             snf_cntrls,
         ) = _build_chip(
-            cpu,
+            chip_cpus,
             ruby_system,
             l1i_type,
             l1d_type,
@@ -225,14 +239,15 @@ def build_two_chip_system(
         all_cntrls.extend(cntrls)
         cpu_sequencers.extend(seqs)
         mem_cntrls.extend(snf_cntrls)
-        rnfs.append(rnf)
+        rnfs.append(chip_rnfs)
         hnfs.append(hnf)
         snfs.append(snf)
         mns.append(mn)
         c2cgs.append(c2cg)
 
-    # Parent all nodes under ruby_system so SimObject hierarchy resolves
-    ruby_system.rnf = rnfs
+    # Flatten rnfs for parenting (ruby_system.rnf expects flat list)
+    all_rnfs = [rnf for chip_rnfs in rnfs for rnf in chip_rnfs]
+    ruby_system.rnf = all_rnfs
     ruby_system.hnf = hnfs
     ruby_system.snf = snfs
     ruby_system.mn = mns
@@ -246,9 +261,9 @@ def build_two_chip_system(
 
     # Downstream routing
     for i in range(2):
-        rnfs[i].setDownstream(
-            hnfs[i].getAllControllers() + c2cgs[i].getAllControllers()
-        )
+        downstream = hnfs[i].getAllControllers() + c2cgs[i].getAllControllers()
+        for rnf in rnfs[i]:
+            rnf.setDownstream(downstream)
         hnfs[i].setDownstream(snfs[i].getAllControllers())
         # C2CG forwards inbound remote requests to the local HNF
         c2cgs[i].setDownstream(hnfs[i].getAllControllers())

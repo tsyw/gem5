@@ -28,8 +28,9 @@
 Driver config for CHI C2C integration tests.
 
 Builds a two-chip CHI system with C2C gateways and runs directed
-traffic via RubyDirectedTester.  Each chip has 1 RNF, 1 HNF, 1 SNF,
-1 MN, and 1 C2CG.  The test-type flag selects the traffic pattern.
+traffic via RubyDirectedTester.  Each chip has N RNFs (default 1),
+1 HNF, 1 SNF, 1 MN, and 1 C2CG.  The test-type flag selects the
+traffic pattern.
 """
 
 import argparse
@@ -94,11 +95,18 @@ parser.add_argument(
     type=int,
     default=50,
 )
+parser.add_argument(
+    "--cpus-per-chip",
+    type=int,
+    default=1,
+    metavar="N",
+    help="Number of RNFs (CPUs) per chip (default 1)",
+)
 
 args = parser.parse_args()
 
-# Force 2 CPUs for two-chip topology
-args.num_cpus = 2
+# Total CPUs = 2 chips * cpus_per_chip
+args.num_cpus = 2 * args.cpus_per_chip
 # Force 2 dirs so setup_memory_controllers handles 2 SNFs
 args.num_dirs = 2
 # Use Crossbar topology for flat two-chip network

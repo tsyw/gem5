@@ -124,8 +124,18 @@ action(allocateTBE, "atbe", desc="Allocate TBE for a transaction") {
 
 action(deallocateTBE, "dtbe", desc="Deallocate TBE") {
   assert(is_valid(tbe));
+  // Record per-transaction latency stats (FR-C03)
+  Tick txnLifetime := curTick() - tbe.allocTime;
+  txnLatencyCount := txnLatencyCount + 1;
+  txnLatencySum := txnLatencySum + txnLifetime;
+  if (txnLifetime < txnLatencyMin) {
+    txnLatencyMin := txnLifetime;
+  }
+  if (txnLifetime > txnLatencyMax) {
+    txnLatencyMax := txnLifetime;
+  }
   DPRINTF(RubySlicc, "C2C TBE dealloc addr=%#x lifetime=%llu ticks\n",
-          address, curTick() - tbe.allocTime);
+          address, txnLifetime);
   storTBEs.removeEntryFromSlot(tbe.storSlot);
   TBEs.deallocate(address);
   unset_tbe();

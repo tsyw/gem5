@@ -48,6 +48,9 @@ c2c_tests = [
     ("chi-c2c-invalidate", "Invalidate", 100),
 ]
 
+# TODO: FR-C04 same-address concurrency test needs RubyDirectedTester
+# support for same-address sequences
+
 for name, test_type, requests in c2c_tests:
     gem5_verify_config(
         name=name,

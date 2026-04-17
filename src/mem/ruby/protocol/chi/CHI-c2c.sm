@@ -441,6 +441,12 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   int tbeFullRetries,   default="0";
   int writePushCount,   default="0";
   int dvmReqsSent,      default="0";
+  // Per-transaction latency tracking (FR-C03)
+  // txnLatencySum / txnLatencyCount gives average latency in ticks
+  int txnLatencyCount,  default="0";
+  Tick txnLatencySum,   default="0";
+  Tick txnLatencyMin,   default="0xFFFFFFFFFFFFFFFF";
+  Tick txnLatencyMax,   default="0";
 
   ////////////////////////////////////////////////////////////////////////////
   // Port definitions (includes funcs.sm for helpers)
