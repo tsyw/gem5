@@ -152,6 +152,7 @@ def build_two_chip_system(
     cpus,
     chip0_range=None,
     chip1_range=None,
+    container_latency=1,
 ):
     """
     Build a two-chip CHI system with C2C gateways.
@@ -254,7 +255,12 @@ def build_two_chip_system(
     ruby_system.c2cg = c2cgs
 
     # Wire C2C link
-    bridges = wireC2CLink(c2cgs[0], c2cgs[1], ruby_system)
+    bridges = wireC2CLink(
+        c2cgs[0],
+        c2cgs[1],
+        ruby_system,
+        container_latency=container_latency,
+    )
     if bridges is not None:
         system.c2c_bridge_a2b = bridges[0]
         system.c2c_bridge_b2a = bridges[1]

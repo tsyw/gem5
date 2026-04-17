@@ -102,6 +102,13 @@ parser.add_argument(
     metavar="N",
     help="Number of RNFs (CPUs) per chip (default 1)",
 )
+parser.add_argument(
+    "--container-latency",
+    type=int,
+    default=1,
+    metavar="CYCLES",
+    help="C2C packetizer bridge container latency (default 1)",
+)
 
 args = parser.parse_args()
 
@@ -176,6 +183,7 @@ system.ruby.network = SimpleNetwork(
     system.cpu,
     chip0_range,
     chip1_range,
+    container_latency=args.container_latency,
 )
 
 # Build topology — Crossbar expects flat controller list
