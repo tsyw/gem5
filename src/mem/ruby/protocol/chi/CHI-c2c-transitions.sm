@@ -129,6 +129,14 @@ transition(WAIT_COMP_ONLY, RspIn_RespSepData, WAIT_COMPACK) {
   popC2CRxRspQueue;
 }
 
+// Multi-flit: additional data flits while waiting for RespSepData
+transition(WAIT_COMP_ONLY, {DatIn_CompData, DatIn_DataSepResp}) {
+  trackDatFlit;
+  forwardC2CDatToLocal;
+  returnDatCredit;
+  popC2CRxDatQueue;
+}
+
 // Informational Comp for combined CompData reads (C2C RX RSP)
 transition(REQ_SENT, RspIn_Comp) {
   returnRspCredit;
@@ -375,6 +383,14 @@ transition(FWD_WAIT_COMP_ONLY, RspIn_RespSepData, FWD_WAIT_COMPACK) {
   consumeRspCredit;
   forwardLocalRspToC2C;
   popRspInQueue;
+}
+
+// Multi-flit: additional data flits while waiting for RespSepData
+transition(FWD_WAIT_COMP_ONLY, {DatIn_CompData, DatIn_DataSepResp}) {
+  trackDatFlit;
+  consumeDatCredit;
+  forwardLocalDatToC2C;
+  popDatInQueue;
 }
 
 // Informational Comp for combined CompData reads (NoC RSP -> consume RSP)
