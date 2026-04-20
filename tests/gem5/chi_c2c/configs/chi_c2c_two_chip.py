@@ -120,9 +120,15 @@ def _build_chip(
 
     snf = CHI_SNF_MainMem(ruby_system, None, None)
 
-    mn = CHI_MN(ruby_system, all_rnf_cntrls)
-
     c2cg = CHI_C2CG(ruby_system, [remote_range])
+
+    # Wire C2CG as extra upstream destination for MN so that DVM snoops
+    # (SnpDvmOp) are forwarded to the C2CG for cross-chip propagation.
+    mn = CHI_MN(
+        ruby_system,
+        all_rnf_cntrls,
+        extra_upstream=c2cg.getAllControllers(),
+    )
 
     network_nodes = list(rnfs) + [hnf, snf, mn, c2cg]
     all_cntrls = []
