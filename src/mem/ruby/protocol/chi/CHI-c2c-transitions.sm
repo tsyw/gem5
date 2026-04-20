@@ -43,7 +43,7 @@
 transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             DL_WAIT_COMP, EV_WAIT_COMP,
             REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
-            WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
+            WR_WAIT_DBID, EVWR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
             SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
@@ -61,7 +61,7 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
 transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             DL_WAIT_COMP, EV_WAIT_COMP,
             REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
-            WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
+            WR_WAIT_DBID, EVWR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
             SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
@@ -136,8 +136,10 @@ transition(REQ_SENT, RspIn_Comp) {
 }
 
 // ReadReceipt can arrive in any read-wait state (C2C RX RSP)
+// Forward to local RN so it knows the read was accepted (HR-6a)
 transition({REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY},
            RspIn_ReadReceipt) {
+  forwardC2CRspToLocal;
   returnRspCredit;
   popC2CRxRspQueue;
 }
@@ -174,8 +176,19 @@ transition(WAIT_COMPACK, CompleteTxn, I) {
 // Return: RSP credit on C2C RX dequeue
 ////////////////////////////////////////////////////////////////////////////
 
-transition(I, {OutReq_WriteEvictFull, OutReq_WritePull},
-           WR_WAIT_DBID) {
+// Non-evict writes use WritePull path (writepush disabled fallback)
+transition(I, OutReq_WritePull, WR_WAIT_DBID) {
+  allocateTBE;
+  recordLocalIDs_fromReq;
+  consumeReqCredit;
+  forwardReqToC2CTx;
+  popReqRdyQueue;
+}
+
+// Evict/clean writes: WriteEvictFull always pull, WriteCleanFull pull fallback
+// These can receive Comp directly (no DBID) from HN
+transition(I, {OutReq_WriteEvictFull, OutReq_EvictWritePull},
+           EVWR_WAIT_DBID) {
   allocateTBE;
   recordLocalIDs_fromReq;
   consumeReqCredit;
@@ -190,8 +203,18 @@ transition(WR_WAIT_DBID, {RspIn_CompDBIDResp, RspIn_DBIDResp},
   popC2CRxRspQueue;
 }
 
-// WriteEvictFull dual-path: HN may respond with Comp directly (no DBID)
-transition(WR_WAIT_DBID, RspIn_Comp, I) {
+// Evict/clean write DBID path: same as WR_WAIT_DBID
+transition(EVWR_WAIT_DBID, {RspIn_CompDBIDResp, RspIn_DBIDResp},
+           WR_WAIT_COMP) {
+  forwardC2CRspToLocal;
+  returnRspCredit;
+  popC2CRxRspQueue;
+}
+
+// Evict/clean write early Comp: HN may respond with Comp directly (no DBID)
+// Only valid for WriteEvictFull/WriteCleanFull — normal writes must NOT
+// receive Comp before DBIDResp (that would be a protocol error).
+transition(EVWR_WAIT_DBID, RspIn_Comp, I) {
   forwardC2CRspToLocal;
   returnRspCredit;
   deallocateTBE;
@@ -751,7 +774,7 @@ transition(WR_PUSH_FWD_WAIT_COMP, RspIn_Comp, I) {
 transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             DL_WAIT_COMP, EV_WAIT_COMP,
             REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
-            WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
+            WR_WAIT_DBID, EVWR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
             SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
@@ -770,7 +793,7 @@ transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
 transition({I, REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             DL_WAIT_COMP, EV_WAIT_COMP,
             REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
-            WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
+            WR_WAIT_DBID, EVWR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
             SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
@@ -798,7 +821,7 @@ transition(SNP_WAIT_RESP, OutSnp_Forward) {
 transition({REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             DL_WAIT_COMP, EV_WAIT_COMP,
             REQ_FWD, REQ_RETRY_WAIT, WR_RETRY_WAIT,
-            WR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
+            WR_WAIT_DBID, EVWR_WAIT_DBID, WR_WAIT_COMP, WAIT_COMPACK,
             WR_FWD_WAIT_DBID, WR_FWD_WAIT_DATA, FWD_WAIT_COMPACK,
             FWD_WAIT_DATA_ONLY, FWD_WAIT_COMP_ONLY,
             DL_FWD_WAIT, EV_FWD_WAIT,
@@ -815,7 +838,7 @@ transition({REQ_SENT, WAIT_DATA_ONLY, WAIT_COMP_ONLY,
             OutReq_WriteBackFull, OutReq_WriteCleanFull,
             OutReq_WriteEvictFull, OutReq_WriteNoSnpFull,
             OutReq_WriteNoSnpPtl,
-            OutReq_WritePull,
+            OutReq_WritePull, OutReq_EvictWritePull,
             OutReq_AtomicStore, OutReq_AtomicLoad}) {
   stallRequestQueue;
 }

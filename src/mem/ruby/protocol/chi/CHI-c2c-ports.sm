@@ -287,9 +287,16 @@ in_port(reqRdyInPort, CHIRequestMsg, reqRdy, rank=3) {
                                cyclesToTicks(stall_recycle_lat));
         } else if (writepush_enabled == false &&
                    isWriteRequest(in_msg.type) &&
-                   in_msg.type != CHIRequestType:WriteEvictFull) {
-          // WritePull fallback: WriteEvictFull always uses pull path
+                   in_msg.type != CHIRequestType:WriteEvictFull &&
+                   in_msg.type != CHIRequestType:WriteCleanFull) {
+          // WritePull fallback for non-evict writes
           trigger(Event:OutReq_WritePull, in_msg.addr,
+                  TBEs[in_msg.addr]);
+        } else if (writepush_enabled == false &&
+                   in_msg.type == CHIRequestType:WriteCleanFull) {
+          // WriteCleanFull can get early Comp (no DBID), like
+          // WriteEvictFull. Uses evict-write-pull path (HR-7).
+          trigger(Event:OutReq_EvictWritePull, in_msg.addr,
                   TBEs[in_msg.addr]);
         } else {
           trigger(reqToEvent(in_msg.type), in_msg.addr,

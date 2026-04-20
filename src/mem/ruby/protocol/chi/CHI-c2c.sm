@@ -159,6 +159,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
         desc="DataSepResp arrived, waiting for RespSepData only";
     WR_WAIT_DBID,      AccessPermission:Busy,
         desc="Waiting for DBIDResp from remote for write";
+    EVWR_WAIT_DBID,    AccessPermission:Busy,
+        desc="Evict/clean write waiting for DBIDResp or direct Comp";
     WR_WAIT_COMP,      AccessPermission:Busy,
         desc="Waiting for Comp from remote HN for write";
     WAIT_COMPACK,      AccessPermission:Busy,
@@ -256,6 +258,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     OutReq_WriteNoSnpFull,       desc="WriteNoSnpFull for remote";
     OutReq_WriteNoSnpPtl,        desc="WriteNoSnpPtl for remote";
     OutReq_WritePull,            desc="Write via WritePull (push disabled)";
+    OutReq_EvictWritePull,       desc="Evict/clean write via WritePull";
     OutReq_Evict,                desc="Evict for remote";
     OutReq_AtomicStore,          desc="AtomicNoReturn for remote";
     OutReq_AtomicLoad,           desc="AtomicReturn for remote";
