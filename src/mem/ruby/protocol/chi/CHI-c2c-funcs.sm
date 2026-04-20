@@ -168,6 +168,46 @@ Event reqToEvent(CHIRequestType type) {
   }
 }
 
+// Check if a CHI response type is a snoop response.
+// Used to prioritize snpTBE lookup over TBE lookup in response ports,
+// preventing collision when both tables have entries for the same address.
+bool isSnpRespType(CHIResponseType type) {
+  if ((type == CHIResponseType:SnpResp_I) ||
+      (type == CHIResponseType:SnpResp_SC) ||
+      (type == CHIResponseType:SnpResp_I_Fwded_UC) ||
+      (type == CHIResponseType:SnpResp_I_Fwded_UD_PD) ||
+      (type == CHIResponseType:SnpResp_SC_Fwded_SC) ||
+      (type == CHIResponseType:SnpResp_SC_Fwded_SD_PD) ||
+      (type == CHIResponseType:SnpResp_UC_Fwded_I) ||
+      (type == CHIResponseType:SnpResp_UD_Fwded_I) ||
+      (type == CHIResponseType:SnpResp_SC_Fwded_I) ||
+      (type == CHIResponseType:SnpResp_SD_Fwded_I)) {
+    return true;
+  }
+  return false;
+}
+
+// Check if a CHI data type is a snoop response data.
+bool isSnpRespDataType(CHIDataType type) {
+  if ((type == CHIDataType:SnpRespData_I) ||
+      (type == CHIDataType:SnpRespData_I_PD) ||
+      (type == CHIDataType:SnpRespData_SC) ||
+      (type == CHIDataType:SnpRespData_SC_PD) ||
+      (type == CHIDataType:SnpRespData_SD) ||
+      (type == CHIDataType:SnpRespData_UC) ||
+      (type == CHIDataType:SnpRespData_UD) ||
+      (type == CHIDataType:SnpRespData_SC_Fwded_SC) ||
+      (type == CHIDataType:SnpRespData_SC_Fwded_SD_PD) ||
+      (type == CHIDataType:SnpRespData_SC_PD_Fwded_SC) ||
+      (type == CHIDataType:SnpRespData_SD_Fwded_SC) ||
+      (type == CHIDataType:SnpRespData_I_Fwded_SD_PD) ||
+      (type == CHIDataType:SnpRespData_I_PD_Fwded_SC) ||
+      (type == CHIDataType:SnpRespData_I_Fwded_SC)) {
+    return true;
+  }
+  return false;
+}
+
 // Event mapping: CHI response type -> C2CG event
 Event respToEvent(CHIResponseType type) {
   if (type == CHIResponseType:Comp_I) {
