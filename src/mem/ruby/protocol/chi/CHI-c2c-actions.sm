@@ -122,6 +122,13 @@ action(allocateTBE, "atbe", desc="Allocate TBE for a transaction") {
   clearTBEDefaults(tbe);
 }
 
+// Mark TBE as outbound (local→remote). Called after allocateTBE for
+// all outbound flows so port handlers can select _Out events.
+action(setOutbound, "sout", desc="Mark TBE as outbound transaction") {
+  assert(is_valid(tbe));
+  tbe.isOutbound := true;
+}
+
 action(deallocateTBE, "dtbe", desc="Deallocate TBE") {
   assert(is_valid(tbe));
   // Record per-transaction latency stats (FR-C03)
@@ -645,6 +652,7 @@ action(allocateDvmTBE, "advmtbe", desc="Allocate DVM TBE") {
   tbe.allocTime := curTick();
   clearTBEDefaults(tbe);
   tbe.isDVM := true;
+  tbe.isOutbound := true;  // DVM originates locally, always outbound
 }
 
 action(recordDvmP1, "rdvmp1",

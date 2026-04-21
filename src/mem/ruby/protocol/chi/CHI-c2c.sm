@@ -150,53 +150,43 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     I,                 AccessPermission:Invalid,
         desc="No active transaction for this address";
 
-    // Outbound request path (local RN -> C2CG -> remote HN)
-    REQ_SENT,          AccessPermission:Busy,
-        desc="Outbound request forwarded, awaiting response";
-    WAIT_DATA_ONLY,    AccessPermission:Busy,
-        desc="RespSepData arrived, waiting for DataSepResp only";
-    WAIT_COMP_ONLY,    AccessPermission:Busy,
-        desc="DataSepResp arrived, waiting for RespSepData only";
-    WR_WAIT_DBID,      AccessPermission:Busy,
-        desc="Waiting for DBIDResp from remote for write";
+    // Merged bidirectional states (HR-4: outbound+inbound share state,
+    // direction tracked via tbe.isOutbound + _Out/_In event split)
+    REQ_ACTIVE,        AccessPermission:Busy,
+        desc="Request active (outbound fwd'd to C2C, inbound fwd'd to HN)";
+    ACTIVE_WAIT_DAT,   AccessPermission:Busy,
+        desc="RespSepData rcvd, waiting for DataSepResp (either direction)";
+    ACTIVE_WAIT_COMP,  AccessPermission:Busy,
+        desc="DataSepResp fwd'd, waiting for RespSepData (either direction)";
+    WR_ACTIVE_DBID,    AccessPermission:Busy,
+        desc="Write active, waiting for DBIDResp (either direction)";
+    COMPACK_ACTIVE,    AccessPermission:Busy,
+        desc="Waiting for CompAck (outbound from local RN, inbound from remote)";
+    DL_ACTIVE,         AccessPermission:Busy,
+        desc="Dataless active, waiting for Comp (either direction)";
+    EV_ACTIVE,         AccessPermission:Busy,
+        desc="Evict active, waiting for Comp (either direction)";
+    ATOMIC_ACTIVE,     AccessPermission:Busy,
+        desc="Atomic active, waiting for response (either direction)";
+
+    // Evict-write-specific state (always outbound; EVWR is not merged
+    // because it can receive early Comp before DBIDResp unlike normal writes)
     EVWR_WAIT_DBID,    AccessPermission:Busy,
         desc="Evict/clean write waiting for DBIDResp or direct Comp";
-    WR_WAIT_COMP,      AccessPermission:Busy,
-        desc="Waiting for Comp from remote HN for write";
-    WAIT_COMPACK,      AccessPermission:Busy,
-        desc="Waiting for CompAck from local RN";
-    DL_WAIT_COMP,      AccessPermission:Busy,
-        desc="Outbound CleanUnique awaiting Comp (needs CompAck)";
-    EV_WAIT_COMP,      AccessPermission:Busy,
-        desc="Outbound Evict awaiting Comp (no CompAck)";
-    ATOMIC_WAIT_RESP,  AccessPermission:Busy,
-        desc="Atomic request sent, awaiting CompData";
 
-    // Inbound request path (remote -> C2C -> this C2CG -> local HN)
-    REQ_FWD,           AccessPermission:Busy,
-        desc="Inbound request issued to local HN";
-    REQ_RETRY_WAIT,    AccessPermission:Busy,
-        desc="Local HN sent RetryAck, waiting for PCrdGrant";
-    WR_RETRY_WAIT,     AccessPermission:Busy,
-        desc="Inbound write retry waiting for PCrdGrant";
-    WR_FWD_WAIT_DBID,  AccessPermission:Busy,
-        desc="Inbound write waiting for DBIDResp from local HN";
+    // Write completion wait states (not merged: semantically different)
+    //   WR_WAIT_COMP: outbound write sent data, awaiting Comp from remote HN
+    //   WR_FWD_WAIT_DATA: inbound write DBIDResp forwarded, awaiting data from remote
+    WR_WAIT_COMP,      AccessPermission:Busy,
+        desc="Outbound write: data forwarded to C2C, waiting for Comp";
     WR_FWD_WAIT_DATA,  AccessPermission:Busy,
-        desc="Waiting for write data from remote to forward";
-    FWD_WAIT_COMPACK,  AccessPermission:Busy,
-        desc="Waiting for CompAck from remote";
-    FWD_WAIT_DATA_ONLY, AccessPermission:Busy,
-        desc="Inbound: RespSepData sent, waiting for DataSepResp";
-    FWD_WAIT_COMP_ONLY, AccessPermission:Busy,
-        desc="Inbound: DataSepResp fwd'd, waiting for RespSepData";
-    DL_FWD_WAIT,       AccessPermission:Busy,
-        desc="Inbound CleanUnique waiting for Comp from local HN";
-    EV_FWD_WAIT,       AccessPermission:Busy,
-        desc="Inbound Evict waiting for Comp from local HN";
-    ATOMIC_FWD_WAIT,   AccessPermission:Busy,
-        desc="Inbound atomic waiting for CompData from local HN";
+        desc="Inbound write: DBIDResp fwd'd to C2C, waiting for write data";
 
     // Retry-wait states for inbound flows
+    REQ_RETRY_WAIT,    AccessPermission:Busy,
+        desc="Inbound read retry waiting for PCrdGrant";
+    WR_RETRY_WAIT,     AccessPermission:Busy,
+        desc="Inbound write retry waiting for PCrdGrant";
     DL_RETRY_WAIT,     AccessPermission:Busy,
         desc="Inbound dataless retry waiting for PCrdGrant";
     EV_RETRY_WAIT,     AccessPermission:Busy,
@@ -276,22 +266,42 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     OutSnp_DvmP2,                desc="SnpDvmOp_P2 from local MN";
     InSnp_Deliver,               desc="Inbound snoop to deliver locally";
 
-    // Response events
-    RspIn_Comp,                  desc="Comp response received";
-    RspIn_CompDBIDResp,          desc="CompDBIDResp received";
-    RspIn_DBIDResp,              desc="DBIDResp received";
-    RspIn_CompAck,               desc="CompAck received";
-    RspIn_ReadReceipt,           desc="ReadReceipt received";
-    RspIn_RespSepData,           desc="RespSepData (split comp) received";
+    // Response events — non-directional (used by DVM/snoop paths)
+    RspIn_Comp,                  desc="Comp response received (DVM/legacy)";
+    RspIn_CompDBIDResp,          desc="CompDBIDResp received (DVM/legacy)";
+    RspIn_DBIDResp,              desc="DBIDResp received (DVM/legacy)";
+    RspIn_CompAck,               desc="CompAck received (legacy)";
+    RspIn_ReadReceipt,           desc="ReadReceipt received (legacy)";
+    RspIn_RespSepData,           desc="RespSepData (split comp) received (legacy)";
     RspIn_SnpResp,               desc="Snoop response (no data)";
 
-    // Data events
-    DatIn_CompData,              desc="CompData received";
-    DatIn_DataSepResp,           desc="DataSepResp received";
+    // Response events — directional (_Out = C2C RX or outbound context,
+    //                               _In  = NoC RSP or inbound context)
+    RspIn_Comp_Out,              desc="Comp from C2C RX (outbound: return RSP credit)";
+    RspIn_Comp_In,               desc="Comp from local HN (inbound: consume RSP credit)";
+    RspIn_CompDBIDResp_Out,      desc="CompDBIDResp from C2C RX (outbound)";
+    RspIn_CompDBIDResp_In,       desc="CompDBIDResp from local HN (inbound)";
+    RspIn_DBIDResp_Out,          desc="DBIDResp from C2C RX (outbound)";
+    RspIn_DBIDResp_In,           desc="DBIDResp from local HN (inbound)";
+    RspIn_CompAck_Out,           desc="CompAck from local RN via NoC (outbound: fwd to C2C)";
+    RspIn_CompAck_In,            desc="CompAck from remote RN via C2C (inbound: fwd to HN)";
+    RspIn_ReadReceipt_Out,       desc="ReadReceipt from C2C RX (outbound only)";
+    RspIn_RespSepData_Out,       desc="RespSepData from C2C RX (outbound)";
+    RspIn_RespSepData_In,        desc="RespSepData from local HN (inbound)";
+
+    // Data events — non-directional (used by snoop path and WrReqData)
     DatIn_SnpRespData,           desc="SnpRespData received";
-    DatIn_CBWrData,              desc="CBWrData received";
-    DatIn_NCBWrData,             desc="NCBWrData received";
     DatIn_WrReqData,             desc="WrReqDataS/L received from C2C";
+
+    // Data events — directional
+    DatIn_CompData_Out,          desc="CompData from C2C RX (outbound read response)";
+    DatIn_CompData_In,           desc="CompData from local HN (inbound read response)";
+    DatIn_DataSepResp_Out,       desc="DataSepResp from C2C RX (outbound)";
+    DatIn_DataSepResp_In,        desc="DataSepResp from local HN (inbound)";
+    DatIn_CBWrData_Out,          desc="CBWrData from local RN via NoC (outbound write)";
+    DatIn_CBWrData_In,           desc="CBWrData from remote via C2C RX (inbound write)";
+    DatIn_NCBWrData_Out,         desc="NCBWrData from local RN via NoC (outbound)";
+    DatIn_NCBWrData_In,          desc="NCBWrData from remote via C2C RX (inbound)";
 
     // Retry handling
     RetryAckFromHN,              desc="RetryAck from local HN (absorb)";
@@ -339,6 +349,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     WriteMask dataBlkValid,     desc="Valid bytes in data buffer";
     int rxtxBytes,              desc="Bytes sent or received";
     bool compAckDone,           desc="CompAck forwarded, awaiting data";
+    bool isOutbound,            desc="True=outbound (local→remote), false=inbound";
   }
 
   // TBE table for request transactions

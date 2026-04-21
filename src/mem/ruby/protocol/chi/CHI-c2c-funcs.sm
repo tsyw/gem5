@@ -260,32 +260,11 @@ Event respToEvent(CHIResponseType type) {
 }
 
 // Event mapping: CHI data type -> C2CG event
+// Only handles non-directional types (snoop data and WrReqData).
+// Directional data types (CompData, DataSepResp, CBWrData, NCBWrData)
+// use dataToEventOut() / dataToEventIn() based on tbe.isOutbound.
 Event dataToEvent(CHIDataType type) {
-  if (type == CHIDataType:CompData_I) {
-    return Event:DatIn_CompData;
-  } else if (type == CHIDataType:CompData_UC) {
-    return Event:DatIn_CompData;
-  } else if (type == CHIDataType:CompData_SC) {
-    return Event:DatIn_CompData;
-  } else if (type == CHIDataType:CompData_UD_PD) {
-    return Event:DatIn_CompData;
-  } else if (type == CHIDataType:CompData_SD_PD) {
-    return Event:DatIn_CompData;
-  } else if (type == CHIDataType:DataSepResp_UC) {
-    return Event:DatIn_DataSepResp;
-  } else if (type == CHIDataType:CBWrData_UC) {
-    return Event:DatIn_CBWrData;
-  } else if (type == CHIDataType:CBWrData_SC) {
-    return Event:DatIn_CBWrData;
-  } else if (type == CHIDataType:CBWrData_UD_PD) {
-    return Event:DatIn_CBWrData;
-  } else if (type == CHIDataType:CBWrData_SD_PD) {
-    return Event:DatIn_CBWrData;
-  } else if (type == CHIDataType:CBWrData_I) {
-    return Event:DatIn_CBWrData;
-  } else if (type == CHIDataType:NCBWrData) {
-    return Event:DatIn_NCBWrData;
-  } else if (type == CHIDataType:SnpRespData_I) {
+  if (type == CHIDataType:SnpRespData_I) {
     return Event:DatIn_SnpRespData;
   } else if (type == CHIDataType:SnpRespData_I_PD) {
     return Event:DatIn_SnpRespData;
@@ -318,8 +297,13 @@ Event dataToEvent(CHIDataType type) {
   } else if (type == CHIDataType:WrReqDataL) {
     return Event:DatIn_WrReqData;
   } else {
-    error("Invalid CHIDataType for C2CG dataToEvent");
+    error("Invalid CHIDataType for C2CG dataToEvent (use dataToEventOut/In for directional types)");
   }
+}
+
+// Check if a CHI data type is a WritePush WrReqData message
+bool isWrReqDataType(CHIDataType type) {
+  return (type == CHIDataType:WrReqDataS) || (type == CHIDataType:WrReqDataL);
 }
 
 // Determine if a request type is a read
@@ -416,6 +400,7 @@ void clearTBEDefaults(TBE tbe) {
   tbe.isDVM := false;
   tbe.isDataless := false;
   tbe.isAtomic := false;
+  tbe.isOutbound := false;
   tbe.retryPending := false;
   tbe.expectingData := false;
   tbe.expectingComp := false;
@@ -424,6 +409,100 @@ void clearTBEDefaults(TBE tbe) {
   tbe.rxtxBytes := 0;
   tbe.pendingSnpResps := 0;
   tbe.compAckDone := false;
+}
+
+// Directional event mapping: outbound context (C2C RX RSP or CompAck from local RN)
+// These events return credits to the C2C credit pool.
+Event respToEventOut(CHIResponseType type) {
+  if ((type == CHIResponseType:Comp_I) ||
+      (type == CHIResponseType:Comp_UC) ||
+      (type == CHIResponseType:Comp_SC) ||
+      (type == CHIResponseType:Comp_UD_PD) ||
+      (type == CHIResponseType:Comp)) {
+    return Event:RspIn_Comp_Out;
+  } else if (type == CHIResponseType:CompDBIDResp) {
+    return Event:RspIn_CompDBIDResp_Out;
+  } else if (type == CHIResponseType:DBIDResp) {
+    return Event:RspIn_DBIDResp_Out;
+  } else if (type == CHIResponseType:CompAck) {
+    return Event:RspIn_CompAck_Out;
+  } else if (type == CHIResponseType:ReadReceipt) {
+    return Event:RspIn_ReadReceipt_Out;
+  } else if (type == CHIResponseType:RespSepData) {
+    return Event:RspIn_RespSepData_Out;
+  } else {
+    error("Invalid CHIResponseType for respToEventOut");
+  }
+}
+
+// Directional event mapping: inbound context (NoC RSP or CompAck from remote)
+// These events consume credits from the C2C credit pool.
+Event respToEventIn(CHIResponseType type) {
+  if ((type == CHIResponseType:Comp_I) ||
+      (type == CHIResponseType:Comp_UC) ||
+      (type == CHIResponseType:Comp_SC) ||
+      (type == CHIResponseType:Comp_UD_PD) ||
+      (type == CHIResponseType:Comp)) {
+    return Event:RspIn_Comp_In;
+  } else if (type == CHIResponseType:CompDBIDResp) {
+    return Event:RspIn_CompDBIDResp_In;
+  } else if (type == CHIResponseType:DBIDResp) {
+    return Event:RspIn_DBIDResp_In;
+  } else if (type == CHIResponseType:CompAck) {
+    return Event:RspIn_CompAck_In;
+  } else if (type == CHIResponseType:RespSepData) {
+    return Event:RspIn_RespSepData_In;
+  } else {
+    error("Invalid CHIResponseType for respToEventIn");
+  }
+}
+
+// Directional data event mapping: outbound context
+// (C2C RX DAT for read responses, or NoC DAT for local write/atomic data)
+Event dataToEventOut(CHIDataType type) {
+  if ((type == CHIDataType:CompData_I) ||
+      (type == CHIDataType:CompData_UC) ||
+      (type == CHIDataType:CompData_SC) ||
+      (type == CHIDataType:CompData_UD_PD) ||
+      (type == CHIDataType:CompData_SD_PD)) {
+    return Event:DatIn_CompData_Out;
+  } else if (type == CHIDataType:DataSepResp_UC) {
+    return Event:DatIn_DataSepResp_Out;
+  } else if ((type == CHIDataType:CBWrData_UC) ||
+             (type == CHIDataType:CBWrData_SC) ||
+             (type == CHIDataType:CBWrData_UD_PD) ||
+             (type == CHIDataType:CBWrData_SD_PD) ||
+             (type == CHIDataType:CBWrData_I)) {
+    return Event:DatIn_CBWrData_Out;
+  } else if (type == CHIDataType:NCBWrData) {
+    return Event:DatIn_NCBWrData_Out;
+  } else {
+    error("Invalid CHIDataType for dataToEventOut");
+  }
+}
+
+// Directional data event mapping: inbound context
+// (NoC DAT for read responses from local HN, or C2C RX DAT for write data)
+Event dataToEventIn(CHIDataType type) {
+  if ((type == CHIDataType:CompData_I) ||
+      (type == CHIDataType:CompData_UC) ||
+      (type == CHIDataType:CompData_SC) ||
+      (type == CHIDataType:CompData_UD_PD) ||
+      (type == CHIDataType:CompData_SD_PD)) {
+    return Event:DatIn_CompData_In;
+  } else if (type == CHIDataType:DataSepResp_UC) {
+    return Event:DatIn_DataSepResp_In;
+  } else if ((type == CHIDataType:CBWrData_UC) ||
+             (type == CHIDataType:CBWrData_SC) ||
+             (type == CHIDataType:CBWrData_UD_PD) ||
+             (type == CHIDataType:CBWrData_SD_PD) ||
+             (type == CHIDataType:CBWrData_I)) {
+    return Event:DatIn_CBWrData_In;
+  } else if (type == CHIDataType:NCBWrData) {
+    return Event:DatIn_NCBWrData_In;
+  } else {
+    error("Invalid CHIDataType for dataToEventIn");
+  }
 }
 
 // Check if all data flits for a cache line have been forwarded
