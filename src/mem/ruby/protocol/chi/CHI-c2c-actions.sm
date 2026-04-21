@@ -308,6 +308,7 @@ action(forwardSnpToC2CTx, "fwdSnpC2C", desc="Forward snoop to C2C TX SNP") {
 action(forwardC2CSnpRspToLocal, "fwdC2CSnpRspL",
        desc="Forward C2C snoop resp to local HN") {
   assert(is_valid(tbe));
+  rsp_onchip := rsp_onchip + 1;
   peek(c2cRxRspInPort, CHIResponseMsg) {
     enqueue(rspOutPort, CHIResponseMsg, response_latency) {
       out_msg := in_msg;
@@ -323,6 +324,7 @@ action(forwardC2CSnpRspToLocal, "fwdC2CSnpRspL",
 action(forwardC2CSnpDatToLocal, "fwdC2CSnpDatL",
        desc="Forward C2C snoop resp data to local HN") {
   assert(is_valid(tbe));
+  dat_onchip := dat_onchip + 1;
   peek(c2cRxDatInPort, CHIDataMsg) {
     enqueue(datOutPort, CHIDataMsg, data_latency) {
       out_msg := in_msg;
@@ -341,6 +343,7 @@ action(forwardC2CSnpDatToLocal, "fwdC2CSnpDatL",
 action(forwardC2CReqToLocal, "fwdC2CReqL", desc="Forward C2C request to local NoC") {
   assert(is_valid(tbe));
   inboundReqCount := inboundReqCount + 1;
+  req_onchip := req_onchip + 1;
   peek(c2cRxReqInPort, CHIRequestMsg) {
     enqueue(reqOutPort, CHIRequestMsg, request_latency) {
       out_msg := in_msg;
@@ -362,6 +365,7 @@ action(forwardC2CReqToLocal, "fwdC2CReqL", desc="Forward C2C request to local No
 
 action(forwardC2CRspToLocal, "fwdC2CRspL", desc="Forward C2C response to local NoC") {
   assert(is_valid(tbe));
+  rsp_onchip := rsp_onchip + 1;
   peek(c2cRxRspInPort, CHIResponseMsg) {
     enqueue(rspOutPort, CHIResponseMsg, response_latency) {
       out_msg := in_msg;
@@ -377,6 +381,7 @@ action(forwardC2CRspToLocal, "fwdC2CRspL", desc="Forward C2C response to local N
 
 action(forwardC2CDatToLocal, "fwdC2CDatL", desc="Forward C2C data to local NoC") {
   assert(is_valid(tbe));
+  dat_onchip := dat_onchip + 1;
   peek(c2cRxDatInPort, CHIDataMsg) {
     enqueue(datOutPort, CHIDataMsg, data_latency) {
       out_msg := in_msg;
@@ -476,6 +481,7 @@ action(forwardLocalSnpDatToC2C, "fwdLSnpDatC2C",
 // come back to this C2CG (not the remote HN).
 action(forwardC2CSnpToLocal, "fwdC2CSnpL", desc="Forward C2C snoop to local") {
   assert(is_valid(tbe));
+  snp_onchip := snp_onchip + 1;
   peek(c2cRxSnpInPort, CHIRequestMsg) {
     enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
       out_msg := in_msg;

@@ -32,6 +32,7 @@
 #include <array>
 #include <deque>
 
+#include "base/statistics.hh"
 #include "mem/ruby/common/Consumer.hh"
 #include "mem/ruby/network/MessageBuffer.hh"
 #include "mem/ruby/protocol/chi/c2c/C2CContainer.hh"
@@ -105,6 +106,17 @@ class C2CPacketizerBridge : public ClockedObject, public Consumer
     // Granule cost per channel (IHI0098A Table 4.4 upper bound)
     static unsigned granulesForChannel(int ch);
     void packAndDeliver();
+
+    // Per-channel message counters (exported as gem5 stats)
+    struct BridgeStats : public statistics::Group
+    {
+        BridgeStats(statistics::Group *parent);
+        statistics::Scalar req_c2c; // REQ messages delivered across C2C link
+        statistics::Scalar snp_c2c; // SNP messages delivered across C2C link
+        statistics::Scalar rsp_c2c; // RSP messages delivered across C2C link
+        statistics::Scalar dat_c2c; // DAT messages delivered across C2C link
+        statistics::Scalar containers_sent; // total containers dispatched
+    } bridgeStats;
 };
 
 } // namespace ruby

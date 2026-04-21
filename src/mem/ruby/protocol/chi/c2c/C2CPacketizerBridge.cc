@@ -37,6 +37,20 @@ namespace gem5
 namespace ruby
 {
 
+C2CPacketizerBridge::BridgeStats::BridgeStats(statistics::Group *parent)
+    : statistics::Group(parent),
+      ADD_STAT(req_c2c, statistics::units::Count::get(),
+               "REQ messages forwarded across C2C link"),
+      ADD_STAT(snp_c2c, statistics::units::Count::get(),
+               "SNP messages forwarded across C2C link"),
+      ADD_STAT(rsp_c2c, statistics::units::Count::get(),
+               "RSP messages forwarded across C2C link"),
+      ADD_STAT(dat_c2c, statistics::units::Count::get(),
+               "DAT messages forwarded across C2C link"),
+      ADD_STAT(containers_sent, statistics::units::Count::get(),
+               "Total containers dispatched across C2C link")
+{}
+
 C2CPacketizerBridge::C2CPacketizerBridge(const Params &p)
     : ClockedObject(p),
       Consumer(this),
@@ -45,7 +59,8 @@ C2CPacketizerBridge::C2CPacketizerBridge(const Params &p)
       bufferedGranules(0),
       rubySystem(p.ruby_system),
       txCreditMgr(nullptr),
-      rxCreditMgr(nullptr)
+      rxCreditMgr(nullptr),
+      bridgeStats(this)
 {
     inBuf[CH_RSP] = p.txRsp;
     inBuf[CH_DAT] = p.txDat;
@@ -168,6 +183,24 @@ C2CPacketizerBridge::packAndDeliver()
 
             remaining -= granPerMsg;
 
+            // Update per-channel message counters
+            switch (ch) {
+                case CH_REQ:
+                    bridgeStats.req_c2c++;
+                    break;
+                case CH_SNP:
+                    bridgeStats.snp_c2c++;
+                    break;
+                case CH_RSP:
+                    bridgeStats.rsp_c2c++;
+                    break;
+                case CH_DAT:
+                    bridgeStats.dat_c2c++;
+                    break;
+                default:
+                    break;
+            }
+
             DPRINTF(RubyCHIC2CPacketizer,
                     "Packed ch=%d, %u granules used, %u remain\n", ch,
                     granPerMsg, remaining);
@@ -176,6 +209,7 @@ C2CPacketizerBridge::packAndDeliver()
 
     // Piggyback credit returns only when a container was actually sent
     if (remaining < chi_c2c::NUM_MSG_GRANULES) {
+        bridgeStats.containers_sent++;
         uint8_t crReq = 0, crRsp = 0, crDat = 0, crSnp = 0;
         txCreditMgr->drainReturnPending(crReq, crRsp, crDat, crSnp);
         if (crReq || crRsp || crDat || crSnp) {

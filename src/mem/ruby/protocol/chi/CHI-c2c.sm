@@ -462,6 +462,18 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   Tick txnLatencyMin,   default="0xFFFFFFFFFFFFFFFF";
   Tick txnLatencyMax,   default="0";
 
+  // Per-message-type traffic counters (EX-012)
+  // *_c2c: messages crossing the C2C link (tracked in C2CPacketizerBridge)
+  // *_onchip: messages forwarded between C2CG and local chip network
+  // req_onchip: inbound REQ forwarded from C2CG to local HNF
+  int req_onchip,  default="0";
+  // snp_onchip: SNP forwarded between C2CG and local RNFs
+  int snp_onchip,  default="0";
+  // rsp_onchip: RSP forwarded between C2CG and local network
+  int rsp_onchip,  default="0";
+  // dat_onchip: DAT forwarded between C2CG and local network
+  int dat_onchip,  default="0";
+
   ////////////////////////////////////////////////////////////////////////////
   // Port definitions (includes funcs.sm for helpers)
   ////////////////////////////////////////////////////////////////////////////
