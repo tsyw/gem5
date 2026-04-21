@@ -156,9 +156,16 @@ class Switch : public BasicRouter
         statistics::Formula total_stall_cy;
         statistics::Formula total_msg_count;
         statistics::Formula avg_stall_cy;
+        statistics::Vector m_in_link_msg_count;
         std::vector<statistics::Formula *> m_msg_counts;
         std::vector<statistics::Formula *> m_msg_bytes;
     } switchStats;
+
+    void
+    incrInLinkCount(int port)
+    {
+        switchStats.m_in_link_msg_count[port]++;
+    }
 };
 
 inline std::ostream &

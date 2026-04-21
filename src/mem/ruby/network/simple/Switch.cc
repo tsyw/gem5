@@ -183,7 +183,9 @@ Switch::SwitchStats::SwitchStats(Switch *parent)
       ADD_STAT(total_msg_count, statistics::units::Count::get(),
                "Total messages forwarded by this switch"),
       ADD_STAT(avg_stall_cy, statistics::units::Ratio::get(),
-               "Average stall cycles per message forwarded by this switch")
+               "Average stall cycles per message forwarded by this switch"),
+      ADD_STAT(m_in_link_msg_count, statistics::units::Count::get(),
+               "Messages received per input link (indexed by input port)")
 {
     for (unsigned int type = MessageSizeType_FIRST; type < MessageSizeType_NUM;
          ++type) {
@@ -218,6 +220,9 @@ Switch::SwitchStats::regStats()
     percent_links_utilized /= statistics::constant(parent->throttles.size());
 
     avg_stall_cy = total_stall_cy / total_msg_count;
+
+    m_in_link_msg_count.init(parent->perfectSwitch.getInLinks())
+        .flags(statistics::nozero);
 
     for (unsigned int type = MessageSizeType_FIRST; type < MessageSizeType_NUM;
          ++type) {
