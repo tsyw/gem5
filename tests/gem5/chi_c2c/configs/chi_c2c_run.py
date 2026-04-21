@@ -109,6 +109,13 @@ parser.add_argument(
     metavar="CYCLES",
     help="C2C packetizer bridge container latency (default 1)",
 )
+parser.add_argument(
+    "--num-c2cgs",
+    type=int,
+    default=1,
+    metavar="K",
+    help="Number of C2C gateways per chip (default 1)",
+)
 
 args = parser.parse_args()
 
@@ -184,6 +191,7 @@ system.ruby.network = SimpleNetwork(
     chip0_range,
     chip1_range,
     container_latency=args.container_latency,
+    num_c2cgs=args.num_c2cgs,
 )
 
 # Build topology — Crossbar expects flat controller list

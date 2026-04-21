@@ -32,16 +32,22 @@ Creates two CHI sub-systems (Chip 0 and Chip 1), each with:
   - 1 HNF (home node with L3 cache)
   - 1 SNF (memory controller)
   - 1 MN  (misc node for DVM)
-  - 1 C2CG (chip-to-chip gateway)
+  - K C2CGs (chip-to-chip gateways, default 1, configurable via num_c2cgs)
 
-The C2CGs are wired together via wireC2CLink().
+The C2CGs are wired together via wireC2CLink(). With K C2CGs per chip,
+each C2CG pair (c2cg_i on chip0 ↔ c2cg_i on chip1) handles a
+non-overlapping partition of the remote address range.
 
 Address space split:
   Chip 0 HNF owns [0x00000000, 0x80000000)   (lower 2 GiB)
   Chip 1 HNF owns [0x80000000, 0x100000000)  (upper 2 GiB)
 
-Each RNF routes all requests to both local HNF and C2CG.
-The C2CG forwards remote-addressed requests across the link.
+With K C2CGs per chip, remote range is split into K equal partitions:
+  Chip 0, C2CG i handles remote [2GiB + i*2GiB/K, 2GiB + (i+1)*2GiB/K)
+  Chip 1, C2CG i handles remote [0GiB + i*2GiB/K,       (i+1)*2GiB/K)
+
+Each RNF routes requests to the local HNF or the C2CG whose addr_range
+covers the destination address.
 """
 
 import os
@@ -81,6 +87,19 @@ except ImportError:
     wireC2CLink = None
 
 
+def _partition_range(range_obj, num_parts):
+    """Split an AddrRange into num_parts equal non-overlapping sub-ranges."""
+    total = int(range_obj.size())
+    part_size = total // num_parts
+    start = int(range_obj.start)
+    parts = []
+    for i in range(num_parts):
+        p_start = start + i * part_size
+        p_size = part_size if i < num_parts - 1 else (total - i * part_size)
+        parts.append(AddrRange(p_start, size=p_size))
+    return parts
+
+
 def _build_chip(
     cpus,
     ruby_system,
@@ -93,11 +112,13 @@ def _build_chip(
     remote_range,
     full_range,
     interleave_idx,
+    num_c2cgs=1,
 ):
     """Build one chip's worth of CHI nodes.
 
     Args:
         cpus: list of SimObjects to serve as CPU parents (1 RNF each)
+        num_c2cgs: number of C2CGs for this chip (default 1)
     """
     rnfs = []
     all_rnf_cntrls = []
@@ -120,17 +141,22 @@ def _build_chip(
 
     snf = CHI_SNF_MainMem(ruby_system, None, None)
 
-    c2cg = CHI_C2CG(ruby_system, [remote_range])
+    # Create num_c2cgs C2CGs, each handling a partition of the remote range
+    remote_partitions = _partition_range(remote_range, num_c2cgs)
+    c2cgs = [CHI_C2CG(ruby_system, [part]) for part in remote_partitions]
+    all_c2cg_cntrls = []
+    for c2cg in c2cgs:
+        all_c2cg_cntrls.extend(c2cg.getAllControllers())
 
-    # Wire C2CG as extra upstream destination for MN so that DVM snoops
-    # (SnpDvmOp) are forwarded to the C2CG for cross-chip propagation.
+    # Wire all C2CGs as extra upstream destinations for MN so that DVM
+    # snoops (SnpDvmOp) are forwarded to all C2CGs for cross-chip propagation.
     mn = CHI_MN(
         ruby_system,
         all_rnf_cntrls,
-        extra_upstream=c2cg.getAllControllers(),
+        extra_upstream=all_c2cg_cntrls,
     )
 
-    network_nodes = list(rnfs) + [hnf, snf, mn, c2cg]
+    network_nodes = list(rnfs) + [hnf, snf, mn] + c2cgs
     all_cntrls = []
     network_cntrls = []
     for node in network_nodes:
@@ -142,7 +168,7 @@ def _build_chip(
         hnf,
         snf,
         mn,
-        c2cg,
+        c2cgs,
         network_nodes,
         all_cntrls,
         network_cntrls,
@@ -159,6 +185,7 @@ def build_two_chip_system(
     chip0_range=None,
     chip1_range=None,
     container_latency=1,
+    num_c2cgs=1,
 ):
     """
     Build a two-chip CHI system with C2C gateways.
@@ -172,10 +199,14 @@ def build_two_chip_system(
               second half -> chip 1). Must have even length.
         chip0_range: Address range for chip 0 (default: lower 2 GiB)
         chip1_range: Address range for chip 1 (default: upper 2 GiB)
+        num_c2cgs: Number of C2CGs per chip (default 1). Each C2CG pair
+                   (c2cg_i on chip0 ↔ c2cg_i on chip1) handles a
+                   partition of the remote address range.
 
     Returns:
         (network_nodes, network_cntrls, all_cntrls,
          cpu_sequencers, mem_cntrls, c2cg_pair)
+        where c2cg_pair is (list_of_chip0_c2cgs, list_of_chip1_c2cgs)
     """
     if CHI_C2CG is None:
         m5.fatal("CHI C2C config classes not available")
@@ -214,6 +245,7 @@ def build_two_chip_system(
     hnfs = []
     snfs = []
     mns = []
+    # c2cgs[chip_i] = list of K C2CGs for chip i
     c2cgs = []
 
     for chip_cpus, addr_range, remote_range, idx in chip_args:
@@ -222,7 +254,7 @@ def build_two_chip_system(
             hnf,
             snf,
             mn,
-            c2cg,
+            chip_c2cgs,
             nodes,
             cntrls,
             net_cntrls,
@@ -240,6 +272,7 @@ def build_two_chip_system(
             remote_range,
             full_range,
             idx,
+            num_c2cgs=num_c2cgs,
         )
         network_nodes.extend(nodes)
         network_cntrls.extend(net_cntrls)
@@ -250,7 +283,7 @@ def build_two_chip_system(
         hnfs.append(hnf)
         snfs.append(snf)
         mns.append(mn)
-        c2cgs.append(c2cg)
+        c2cgs.append(chip_c2cgs)
 
     # Flatten rnfs for parenting (ruby_system.rnf expects flat list)
     all_rnfs = [rnf for chip_rnfs in rnfs for rnf in chip_rnfs]
@@ -258,27 +291,35 @@ def build_two_chip_system(
     ruby_system.hnf = hnfs
     ruby_system.snf = snfs
     ruby_system.mn = mns
-    ruby_system.c2cg = c2cgs
+    # Flatten c2cgs for parenting
+    ruby_system.c2cg = [c for chip in c2cgs for c in chip]
 
-    # Wire C2C link
-    bridges = wireC2CLink(
-        c2cgs[0],
-        c2cgs[1],
-        ruby_system,
-        container_latency=container_latency,
-    )
-    if bridges is not None:
-        system.c2c_bridge_a2b = bridges[0]
-        system.c2c_bridge_b2a = bridges[1]
+    # Wire K C2C links: c2cgs[0][i] ↔ c2cgs[1][i]
+    all_bridges = []
+    for i in range(num_c2cgs):
+        bridges = wireC2CLink(
+            c2cgs[0][i],
+            c2cgs[1][i],
+            ruby_system,
+            container_latency=container_latency,
+        )
+        if bridges is not None:
+            setattr(system, f"c2c_bridge_a2b_{i}", bridges[0])
+            setattr(system, f"c2c_bridge_b2a_{i}", bridges[1])
+            all_bridges.append(bridges)
 
     # Downstream routing
     for i in range(2):
-        downstream = hnfs[i].getAllControllers() + c2cgs[i].getAllControllers()
+        all_c2cg_cntrls = []
+        for c2cg in c2cgs[i]:
+            all_c2cg_cntrls.extend(c2cg.getAllControllers())
+        downstream = hnfs[i].getAllControllers() + all_c2cg_cntrls
         for rnf in rnfs[i]:
             rnf.setDownstream(downstream)
         hnfs[i].setDownstream(snfs[i].getAllControllers())
-        # C2CG forwards inbound remote requests to the local HNF
-        c2cgs[i].setDownstream(hnfs[i].getAllControllers())
+        # Each C2CG forwards inbound remote requests to the local HNF
+        for c2cg in c2cgs[i]:
+            c2cg.setDownstream(hnfs[i].getAllControllers())
 
     # Data message size
     for cntrl in all_cntrls:
