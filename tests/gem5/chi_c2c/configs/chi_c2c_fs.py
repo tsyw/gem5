@@ -182,20 +182,45 @@ def _make_hbm2_ctrl(addr_range):
 
 
 # ------------------------------------------------------------------
-# R1: Monolithic single-chip CHI system
+# R1: Monolithic single-chip CHI system (EX-008: NUMA multi-HNF/SNF)
 # ------------------------------------------------------------------
-def _build_r1(ruby_system, system, args, cpus, mem_range):
+def _build_r1(ruby_system, cache_line_size, cpus, mem_range, num_hnfs=4):
     """
-    Build R1 (monolithic) CHI hierarchy.
+    Build R1 (monolithic) CHI hierarchy with NUMA-aware HNF/SNF layout.
+
+    num_hnfs controls the number of NUMA domains (paper Table I uses 4).
+    Each HNF covers an interleaved portion of the full address space.
+    Each SNF backs a contiguous NUMA-sized sub-range with its own HBM2 ctrl.
 
     Returns (network_nodes, network_cntrls, all_cntrls, cpu_seqs, snf_cntrls)
-    where snf_cntrls is a list of CHI_SNF_MainMem controller objects (not yet
-    wired to memory — caller must set memory_out_port and addr_ranges).
+    where snf_cntrls is a list of CHI_SNF controller objects whose
+    memory_out_port and addr_ranges must be set by the caller.
     """
-    CHI_HNF.createAddrRanges([mem_range], system.cache_line_size.value, [0])
-    hnf = CHI_HNF(0, ruby_system, _PaperSLC, None)
-    snf = CHI_SNF_MainMem(ruby_system, None, None)
+    # Interleaved HNF ranges (cache-line granularity)
+    hnf_indices = list(range(num_hnfs))
+    CHI_HNF.createAddrRanges([mem_range], cache_line_size, hnf_indices)
+    hnfs = [CHI_HNF(i, ruby_system, _PaperSLC, None) for i in hnf_indices]
+
+    # Contiguous SNF ranges — one per NUMA domain (EX-008)
+    numa_size = mem_range.size() // num_hnfs
+    snfs = []
+    numa_ranges = []
+    for i in range(num_hnfs):
+        snf = CHI_SNF_MainMem(ruby_system, None, None)
+        snfs.append(snf)
+        numa_ranges.append(
+            AddrRange(mem_range.start + i * numa_size, size=numa_size)
+        )
+
     mn = CHI_MN(ruby_system)
+
+    all_hnf_cntrls = []
+    for hnf in hnfs:
+        all_hnf_cntrls.extend(hnf.getAllControllers())
+
+    all_snf_cntrls = []
+    for snf in snfs:
+        all_snf_cntrls.extend(snf.getAllControllers())
 
     rnfs = []
     for cpu in cpus:
@@ -205,25 +230,38 @@ def _build_r1(ruby_system, system, args, cpus, mem_range):
             _PaperL1I,
             _PaperL1D,
             _PaperL2,
-            system.cache_line_size.value,
+            cache_line_size,
         )
-        rnf.setDownstream([hnf])
+        rnf.setDownstream(all_hnf_cntrls)
         rnfs.append(rnf)
 
-    hnf.setDownstream([snf])
+    for hnf in hnfs:
+        hnf.setDownstream(all_snf_cntrls)
 
+    network_nodes = list(rnfs) + hnfs + snfs + [mn]
     all_cntrls = []
-    for rnf in rnfs:
-        all_cntrls += rnf.getAllControllers()
-    all_cntrls += hnf.getAllControllers()
-    all_cntrls += snf.getAllControllers()
-    all_cntrls += mn.getAllControllers()
+    network_cntrls = []
+    for node in network_nodes:
+        all_cntrls.extend(node.getAllControllers())
+        network_cntrls.extend(node.getNetworkSideControllers())
 
     cpu_seqs = []
     for rnf in rnfs:
-        cpu_seqs += rnf.getSequencers()
+        cpu_seqs.extend(rnf.getSequencers())
 
-    return (all_cntrls, all_cntrls, all_cntrls, cpu_seqs, [snf._cntrl])
+    ruby_system.rnf = rnfs
+    ruby_system.hnf = hnfs
+    ruby_system.snf = snfs
+    ruby_system.mn = [mn]
+
+    return (
+        network_nodes,
+        network_cntrls,
+        all_cntrls,
+        cpu_seqs,
+        all_snf_cntrls,
+        numa_ranges,
+    )
 
 
 # ------------------------------------------------------------------
@@ -308,8 +346,14 @@ def build_fs_system(args):
             all_cntrls,
             cpu_seqs,
             snf_cntrls,
-        ) = _build_r1(system.ruby, system, args, cpus, mem_range)
-        mem_ranges = [mem_range]
+            mem_ranges,
+        ) = _build_r1(
+            system.ruby,
+            args.cacheline_size,
+            cpus,
+            mem_range,
+            num_hnfs=args.num_hnfs,
+        )
 
     else:  # R2
         # args.mem_size is a string like "8GiB"; split evenly via AddrRange
@@ -324,7 +368,7 @@ def build_fs_system(args):
             net_cntrls,
             all_cntrls,
             cpu_seqs,
-            snf_cntrls_objs,
+            snf_cntrls,  # already a flat list of SNF controller objects
             _,
         ) = build_two_chip_system(
             system.ruby,
@@ -337,9 +381,6 @@ def build_fs_system(args):
             num_c2cgs=args.num_c2cgs,
             txq_size=args.txq_size,
         )
-        # build_two_chip_system returns CHI_SNF_MainMem node objects;
-        # extract the underlying controller for port binding
-        snf_cntrls = [s._cntrl for s in snf_cntrls_objs]
 
     # ------ Ruby network topology ------
     ruby_topology = Ruby.create_topology(net_cntrls, args)
@@ -400,6 +441,15 @@ def _add_fs_options(parser):
         type=int,
         default=64,
         help="Total CPU cores across all chips (default 64)",
+    )
+    parser.add_argument(
+        "--num-hnfs",
+        type=int,
+        default=4,
+        help=(
+            "HNF/SNF count for R1 NUMA domains (EX-008). "
+            "Must be a power of 2. Paper Table I: R1=4, R2=2/chip, R3=1/chip."
+        ),
     )
     parser.add_argument(
         "--num-c2cgs",
