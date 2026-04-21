@@ -41,6 +41,8 @@ C2CPacketizerBridge::C2CPacketizerBridge(const Params &p)
     : ClockedObject(p),
       Consumer(this),
       containerLatency(Cycles(p.container_latency)),
+      txqSize(p.txq_size),
+      bufferedGranules(0),
       rubySystem(p.ruby_system),
       txCreditMgr(nullptr),
       rxCreditMgr(nullptr)
@@ -118,8 +120,14 @@ C2CPacketizerBridge::wakeup()
 
     for (int i = 0; i < NUM_CHANNELS; i++) {
         while (inBuf[i]->isReady(curTk)) {
+            // Enforce TXQ limit: stop draining when buffer is full
+            if (txqSize > 0 && bufferedGranules >= txqSize) {
+                scheduleEvent(Cycles(1));
+                break;
+            }
             MsgPtr msg = inBuf[i]->peekMsgPtr();
             msgQueues[i].push_back(msg);
+            bufferedGranules += granulesForChannel(i);
             inBuf[i]->dequeue(curTk);
         }
     }
@@ -152,6 +160,7 @@ C2CPacketizerBridge::packAndDeliver()
 
             MsgPtr msg = msgQueues[ch].front();
             msgQueues[ch].pop_front();
+            bufferedGranules -= granPerMsg;
 
             outBuf[ch]->enqueue(msg, curTk, delta,
                                 rubySystem->getRandomization(),

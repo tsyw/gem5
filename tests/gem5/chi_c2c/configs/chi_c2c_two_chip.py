@@ -186,6 +186,7 @@ def build_two_chip_system(
     chip1_range=None,
     container_latency=1,
     num_c2cgs=1,
+    txq_size=0,
 ):
     """
     Build a two-chip CHI system with C2C gateways.
@@ -202,6 +203,7 @@ def build_two_chip_system(
         num_c2cgs: Number of C2CGs per chip (default 1). Each C2CG pair
                    (c2cg_i on chip0 ↔ c2cg_i on chip1) handles a
                    partition of the remote address range.
+        txq_size: Max buffered granules in bridge TX queues (0 = unlimited).
 
     Returns:
         (network_nodes, network_cntrls, all_cntrls,
@@ -302,6 +304,7 @@ def build_two_chip_system(
             c2cgs[1][i],
             ruby_system,
             container_latency=container_latency,
+            txq_size=txq_size,
         )
         if bridges is not None:
             setattr(system, f"c2c_bridge_a2b_{i}", bridges[0])

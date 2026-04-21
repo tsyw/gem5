@@ -116,8 +116,31 @@ parser.add_argument(
     metavar="K",
     help="Number of C2C gateways per chip (default 1)",
 )
+parser.add_argument(
+    "--link-bw-gbps",
+    type=float,
+    default=0.0,
+    metavar="BW",
+    help="C2C link bandwidth in GB/s (0 = use --container-latency directly). "
+    "When non-zero, container_latency is computed as "
+    "ceil(256 / bw_gbps) cycles (assumes 1GHz clock).",
+)
+parser.add_argument(
+    "--txq-size",
+    type=int,
+    default=0,
+    metavar="N",
+    help="Max buffered granules in C2C bridge TX queues (0 = unlimited).",
+)
 
 args = parser.parse_args()
+
+import math
+
+# Compute container_latency from bandwidth if specified
+# Container = 256 bytes; at 1GHz clock, latency_cycles = ceil(256 / bw_gbps)
+if args.link_bw_gbps > 0.0:
+    args.container_latency = max(1, math.ceil(256.0 / args.link_bw_gbps))
 
 # Total CPUs = 2 chips * cpus_per_chip
 args.num_cpus = 2 * args.cpus_per_chip
@@ -192,6 +215,7 @@ system.ruby.network = SimpleNetwork(
     chip1_range,
     container_latency=args.container_latency,
     num_c2cgs=args.num_c2cgs,
+    txq_size=args.txq_size,
 )
 
 # Build topology — Crossbar expects flat controller list

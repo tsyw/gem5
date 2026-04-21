@@ -91,6 +91,8 @@ class C2CPacketizerBridge : public ClockedObject, public Consumer
     std::array<std::deque<MsgPtr>, NUM_CHANNELS> msgQueues;
 
     const Cycles containerLatency;
+    const unsigned txqSize;    // 0 = unlimited
+    unsigned bufferedGranules; // total granules currently in msgQueues
     RubySystem *const rubySystem;
 
     C2CCreditManager *txCreditMgr;

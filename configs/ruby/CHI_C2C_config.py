@@ -107,7 +107,9 @@ class CHI_C2CG(CHI_Node):
         return [self._cntrl]
 
 
-def wireC2CLink(c2cg_a, c2cg_b, ruby_system=None, container_latency=1):
+def wireC2CLink(
+    c2cg_a, c2cg_b, ruby_system=None, container_latency=1, txq_size=0
+):
     """
     Wire two C2CG nodes via C2CPacketizerBridge instances.
 
@@ -116,6 +118,12 @@ def wireC2CLink(c2cg_a, c2cg_b, ruby_system=None, container_latency=1):
 
     If ruby_system is None, falls back to direct MessageBuffer wiring
     (legacy mode, useful for unit tests that don't need packetization).
+
+    Args:
+        container_latency: Per-container delivery latency in cycles.
+            Compute from bandwidth as ceil(256 / link_bw_gbps) at 1GHz.
+        txq_size: Max buffered granules in bridge TX queues (0 = unlimited).
+            Use 128 or 256 to model TXQ backpressure per the paper.
 
     Returns (bridge_a2b, bridge_b2a) when bridges are created, or
     None when using legacy mode.  Caller must attach returned bridges
@@ -155,6 +163,7 @@ def wireC2CLink(c2cg_a, c2cg_b, ruby_system=None, container_latency=1):
             rxDat=rx_cntrl.c2cRxDat,
             rxMisc=rx_cntrl.c2cRxMisc,
             container_latency=container_latency,
+            txq_size=txq_size,
             ruby_system=ruby_system,
             tx_controller=tx_cntrl,
             rx_controller=rx_cntrl,
