@@ -39,6 +39,7 @@ void set_tbe(TBE b);
 void unset_tbe();
 void wakeUpAllBuffers(Addr a);
 MachineID mapAddressToDownstreamMachine(Addr addr);
+NetDest allUpstreamDest();
 
 ////////////////////////////////////////////////////////////////////////////
 // Interface functions required by SLICC
@@ -306,6 +307,15 @@ bool isWrReqDataType(CHIDataType type) {
   return (type == CHIDataType:WrReqDataS) || (type == CHIDataType:WrReqDataL);
 }
 
+bool isWriteDataType(CHIDataType type) {
+  return ((type == CHIDataType:CBWrData_UC) ||
+          (type == CHIDataType:CBWrData_SC) ||
+          (type == CHIDataType:CBWrData_UD_PD) ||
+          (type == CHIDataType:CBWrData_SD_PD) ||
+          (type == CHIDataType:CBWrData_I) ||
+          (type == CHIDataType:NCBWrData));
+}
+
 // Determine if a request type is a read
 bool isReadRequest(CHIRequestType type) {
   if ((type == CHIRequestType:ReadShared) ||
@@ -406,6 +416,8 @@ void clearTBEDefaults(TBE tbe) {
   tbe.expectingComp := false;
   tbe.resPlane := 0;
   tbe.usedSharedCredit := false;
+  tbe.dataBlk.clear();
+  tbe.dataBlkValid.clear();
   tbe.rxtxBytes := 0;
   tbe.pendingSnpResps := 0;
   tbe.compAckDone := false;

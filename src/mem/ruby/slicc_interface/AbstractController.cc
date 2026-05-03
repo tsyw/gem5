@@ -118,6 +118,9 @@ AbstractController::init()
     for (auto abs_cntrl : params().upstream_destinations) {
         upstreamDestinations.add(abs_cntrl->getMachineID());
     }
+    for (auto node_id : params().upstream_cache_destinations) {
+        upstreamDestinations.add(MachineID(MachineType_Cache, node_id));
+    }
 }
 
 void

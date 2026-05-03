@@ -684,13 +684,17 @@ void prepareRequest(TBE tbe, CHIRequestType type, CHIRequestMsg & out_msg) {
 // Sets rmtDest so C2CG knows which remote RNs to actually snoop.
 // Must be called AFTER Destination is populated from dir_sharers.
 void fixupC2CSnpDest(TBE tbe, CHIRequestMsg & out_msg) {
+  NetDest remoteTargets :=
+      tbe.dir_c2cSharerGateways.remoteSharersIn(out_msg.Destination);
+  NetDest gatewayTargets :=
+      tbe.dir_c2cSharerGateways.gatewaysFor(remoteTargets);
   DPRINTF(RubySlicc, "fixupC2CSnpDest: remoteSharers=%d gateways=%d\n",
-          tbe.dir_c2cRemoteSharers.count(), tbe.dir_c2cGateways.count());
-  if (tbe.dir_c2cRemoteSharers.count() > 0) {
-    out_msg.Destination.removeNetDest(tbe.dir_c2cRemoteSharers);
-    out_msg.Destination.addNetDest(tbe.dir_c2cGateways);
+          remoteTargets.count(), gatewayTargets.count());
+  if (remoteTargets.count() > 0) {
+    out_msg.Destination.removeNetDest(remoteTargets);
+    out_msg.Destination.addNetDest(gatewayTargets);
     out_msg.hasRmtDest := true;
-    out_msg.rmtDest := tbe.dir_c2cRemoteSharers;
+    out_msg.rmtDest := remoteTargets;
     DPRINTF(RubySlicc, "fixupC2CSnpDest: set hasRmtDest=true rmtDest=%s Dest=%s\n",
             out_msg.rmtDest, out_msg.Destination);
   }
@@ -700,9 +704,9 @@ void fixupC2CSnpDest(TBE tbe, CHIRequestMsg & out_msg) {
 // with its C2CG gateway and set rmtDest to just that one RN.
 void fixupC2CSingleSnpDest(TBE tbe, CHIRequestMsg & out_msg,
                            MachineID target) {
-  if (tbe.dir_c2cRemoteSharers.isElement(target)) {
+  if (tbe.dir_c2cSharerGateways.contains(target)) {
     out_msg.Destination.remove(target);
-    out_msg.Destination.addNetDest(tbe.dir_c2cGateways);
+    out_msg.Destination.add(tbe.dir_c2cSharerGateways.lookup(target));
     out_msg.hasRmtDest := true;
     out_msg.rmtDest.clear();
     out_msg.rmtDest.add(target);
@@ -715,6 +719,7 @@ void addRequestorToSharers(TBE tbe) {
   if (tbe.reqHasRmtDest) {
     tbe.dir_sharers.addNetDest(tbe.reqRmtDest);
     tbe.dir_c2cRemoteSharers.addNetDest(tbe.reqRmtDest);
+    tbe.dir_c2cSharerGateways.addNetDest(tbe.reqRmtDest, tbe.requestor);
     tbe.dir_c2cGateways.add(tbe.requestor);
   } else {
     tbe.dir_sharers.add(tbe.requestor);
@@ -740,11 +745,11 @@ bool isRequestorInSharers(TBE tbe) {
 
 void removeRequestorFromSharers(TBE tbe) {
   if (tbe.reqHasRmtDest) {
-    MachineID rmt := tbe.reqRmtDest.smallestElement();
-    tbe.dir_sharers.remove(rmt);
-    tbe.dir_c2cRemoteSharers.remove(rmt);
+    tbe.dir_sharers.removeNetDest(tbe.reqRmtDest);
+    tbe.dir_c2cRemoteSharers.removeNetDest(tbe.reqRmtDest);
+    tbe.dir_c2cSharerGateways.removeNetDest(tbe.reqRmtDest);
     // If no more remote sharers through this gateway, remove gateway
-    if (tbe.dir_c2cRemoteSharers.count() == 0) {
+    if (tbe.dir_c2cSharerGateways.countGatewayUsers(tbe.requestor) == 0) {
       tbe.dir_c2cGateways.remove(tbe.requestor);
     }
   } else {
@@ -966,12 +971,14 @@ void copyCacheAndDir(CacheEntry cache_entry, DirEntry dir_entry,
     tbe.dir_ownerIsExcl := dir_entry.ownerIsExcl;
     tbe.dir_c2cRemoteSharers := dir_entry.c2cRemoteSharers;
     tbe.dir_c2cGateways := dir_entry.c2cGateways;
+    tbe.dir_c2cSharerGateways := dir_entry.c2cSharerGateways;
     assert(tbe.dir_sharers.count() > 0);
   } else {
     tbe.dir_sharers.clear();
     tbe.dir_ownerExists := false;
     tbe.dir_c2cRemoteSharers.clear();
     tbe.dir_c2cGateways.clear();
+    tbe.dir_c2cSharerGateways.clear();
   }
   // Sanity checks
   assert((tbe.dir_ownerExists && tbe.dir_ownerIsExcl) ==
@@ -1051,6 +1058,7 @@ void copyCacheAndDirTBEs(TBE src, TBE dst) {
   dst.dir_ownerIsExcl := src.dir_ownerIsExcl;
   dst.dir_c2cRemoteSharers := src.dir_c2cRemoteSharers;
   dst.dir_c2cGateways := src.dir_c2cGateways;
+  dst.dir_c2cSharerGateways := src.dir_c2cSharerGateways;
   printTBEState(dst);
 }
 

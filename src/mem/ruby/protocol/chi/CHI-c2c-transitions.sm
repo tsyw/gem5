@@ -30,7 +30,7 @@
 // HR-4: 8 outbound/inbound state pairs merged into bidirectional states.
 // Direction tracked via tbe.isOutbound + _Out/_In event split at port handlers.
 //
-// State count: 26 (down from 34, -8 pairs merged)
+// State count: 30 active states
 //
 // Credit rules (Decision D5):
 //   Consume: when message is enqueued to C2C TX buffer
@@ -44,9 +44,10 @@
 
 // All 26 active states (for wildcard transition lists)
 // I, REQ_ACTIVE, ACTIVE_WAIT_DAT, ACTIVE_WAIT_COMP,
-// WR_ACTIVE_DBID, EVWR_WAIT_DBID, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
-// COMPACK_ACTIVE, DL_ACTIVE, EV_ACTIVE, ATOMIC_ACTIVE,
-// REQ_RETRY_WAIT, WR_RETRY_WAIT, DL_RETRY_WAIT, EV_RETRY_WAIT,
+// WR_ACTIVE_DBID, EVWR_WAIT_DBID, EVWR_WAIT_DATA, EVWR_FWD_WAIT_DATA,
+// WR_WAIT_COMP, WR_FWD_WAIT_DATA, COMPACK_ACTIVE, DL_ACTIVE,
+// EV_ACTIVE, ATOMIC_ACTIVE,
+// REQ_RETRY_WAIT, WR_RETRY_WAIT, EVWR_RETRY_WAIT, DL_RETRY_WAIT, EV_RETRY_WAIT,
 // ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT,
 // SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
 // DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
@@ -57,9 +58,11 @@
 ////////////////////////////////////////////////////////////////////////////
 
 transition({I, REQ_ACTIVE, ACTIVE_WAIT_DAT, ACTIVE_WAIT_COMP,
-            WR_ACTIVE_DBID, EVWR_WAIT_DBID, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
+            WR_ACTIVE_DBID, EVWR_WAIT_DBID, EVWR_WAIT_DATA,
+            EVWR_FWD_WAIT_DATA, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
             COMPACK_ACTIVE, DL_ACTIVE, EV_ACTIVE, ATOMIC_ACTIVE,
-            REQ_RETRY_WAIT, WR_RETRY_WAIT, DL_RETRY_WAIT, EV_RETRY_WAIT,
+            REQ_RETRY_WAIT, WR_RETRY_WAIT, EVWR_RETRY_WAIT,
+            DL_RETRY_WAIT, EV_RETRY_WAIT,
             ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT,
             SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
@@ -70,9 +73,11 @@ transition({I, REQ_ACTIVE, ACTIVE_WAIT_DAT, ACTIVE_WAIT_COMP,
 }
 
 transition({I, REQ_ACTIVE, ACTIVE_WAIT_DAT, ACTIVE_WAIT_COMP,
-            WR_ACTIVE_DBID, EVWR_WAIT_DBID, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
+            WR_ACTIVE_DBID, EVWR_WAIT_DBID, EVWR_WAIT_DATA,
+            EVWR_FWD_WAIT_DATA, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
             COMPACK_ACTIVE, DL_ACTIVE, EV_ACTIVE, ATOMIC_ACTIVE,
-            REQ_RETRY_WAIT, WR_RETRY_WAIT, DL_RETRY_WAIT, EV_RETRY_WAIT,
+            REQ_RETRY_WAIT, WR_RETRY_WAIT, EVWR_RETRY_WAIT,
+            DL_RETRY_WAIT, EV_RETRY_WAIT,
             ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT,
             SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
@@ -288,8 +293,8 @@ transition(REQ_RETRY_WAIT, PCrdGrantFromHN, REQ_ACTIVE) {
 // Return: RSP credit on C2C RX dequeue
 ////////////////////////////////////////////////////////////////////////////
 
-// Non-evict writes use WritePull path (writepush disabled fallback)
-transition(I, OutReq_WritePull, WR_ACTIVE_DBID) {
+// Non-evict writes that wait for DBID before data use WritePull semantics.
+transition(I, {OutReq_WritePull, OutReq_WriteBackFull}, WR_ACTIVE_DBID) {
   allocateTBE;
   setOutbound;
   recordLocalIDs_fromReq;
@@ -298,8 +303,7 @@ transition(I, OutReq_WritePull, WR_ACTIVE_DBID) {
   popReqRdyQueue;
 }
 
-// Evict/clean writes: WriteEvictFull always pull, WriteCleanFull pull fallback
-// These can receive Comp directly (no DBID) from HN
+// Evict/clean writes can receive Comp directly (no DBID) from HN.
 transition(I, {OutReq_WriteEvictFull, OutReq_EvictWritePull},
            EVWR_WAIT_DBID) {
   allocateTBE;
@@ -314,6 +318,14 @@ transition(I, {OutReq_WriteEvictFull, OutReq_EvictWritePull},
 // Return: REQ credit on C2C RX REQ dequeue
 // Consume: RSP/DAT credit on send to C2C TX
 transition(I, InReq_Write, WR_ACTIVE_DBID) {
+  allocateTBE;
+  recordRemoteIDs_fromC2CReq;
+  forwardC2CReqToLocal;
+  returnReqCredit;
+  popC2CRxReqQueue;
+}
+
+transition(I, InReq_EvictWrite, EVWR_WAIT_DBID) {
   allocateTBE;
   recordRemoteIDs_fromC2CReq;
   forwardC2CReqToLocal;
@@ -359,10 +371,18 @@ transition(WR_RETRY_WAIT, PCrdGrantFromHN, WR_ACTIVE_DBID) {
 
 // EVWR_WAIT_DBID: evict/clean write DBIDResp (outbound, C2C RX RSP)
 transition(EVWR_WAIT_DBID, {RspIn_CompDBIDResp_Out, RspIn_DBIDResp_Out},
-           WR_WAIT_COMP) {
+           EVWR_WAIT_DATA) {
   forwardC2CRspToLocal;
   returnRspCredit;
   popC2CRxRspQueue;
+}
+
+// EVWR_WAIT_DBID: evict/clean write DBIDResp (inbound, local HN -> C2C)
+transition(EVWR_WAIT_DBID, {RspIn_CompDBIDResp_In, RspIn_DBIDResp_In},
+           EVWR_FWD_WAIT_DATA) {
+  consumeRspCredit;
+  forwardLocalRspToC2C;
+  popRspInQueue;
 }
 
 // EVWR_WAIT_DBID: early Comp from remote (outbound, evict/clean write only)
@@ -374,10 +394,41 @@ transition(EVWR_WAIT_DBID, RspIn_Comp_Out, I) {
   popC2CRxRspQueue;
 }
 
-// WR_WAIT_COMP: write data from local RN (outbound, NoC DAT -> C2C TX)
-transition(WR_WAIT_COMP, {DatIn_CBWrData_Out, DatIn_NCBWrData_Out}) {
+// EVWR_WAIT_DBID: early Comp from local HN (inbound, evict/clean write only)
+transition(EVWR_WAIT_DBID, RspIn_Comp_In, I) {
+  consumeRspCredit;
+  forwardLocalRspToC2C;
+  deallocateTBE;
+  wakeUpStalled;
+  popRspInQueue;
+}
+
+// EVWR_WAIT_DBID: inbound evict/clean write retry
+transition(EVWR_WAIT_DBID, RetryAckFromHN, EVWR_RETRY_WAIT) {
+  recordPCrdType;
+  popRspInQueue;
+}
+
+transition(EVWR_RETRY_WAIT, PCrdGrantFromHN, EVWR_WAIT_DBID) {
+  reissueRequest;
+  popRspInQueue;
+}
+
+// EVWR_WAIT_DATA: evict/clean write data from local RN completes outbound flow
+transition(EVWR_WAIT_DATA, {DatIn_CBWrData_Out, DatIn_NCBWrData_Out}) {
+  trackDatFlit;
   consumeDatCredit;
   forwardDatToC2CTx;
+  checkDataTxnComplete;
+  popDatInQueue;
+}
+
+// WR_WAIT_COMP: write data from local RN (outbound, NoC DAT -> C2C TX)
+transition(WR_WAIT_COMP, {DatIn_CBWrData_Out, DatIn_NCBWrData_Out}) {
+  trackDatFlit;
+  consumeDatCredit;
+  forwardDatToC2CTx;
+  checkWriteBackTxnComplete;
   popDatInQueue;
 }
 
@@ -390,11 +441,46 @@ transition(WR_WAIT_COMP, RspIn_Comp_Out, I) {
   popC2CRxRspQueue;
 }
 
+transition(WR_WAIT_COMP, CompleteTxn, I) {
+  deallocateTBE;
+  wakeUpStalled;
+  popTriggerQueue;
+}
+
+// EVWR_FWD_WAIT_DATA: evict/clean write data from remote completes inbound flow
+transition(EVWR_FWD_WAIT_DATA, {DatIn_CBWrData_In, DatIn_NCBWrData_In}) {
+  trackDatFlit;
+  forwardC2CWrDatToLocal;
+  returnDatCredit;
+  checkDataTxnComplete;
+  popC2CRxDatQueue;
+}
+
+transition(EVWR_WAIT_DATA, CompleteTxn, I) {
+  deallocateTBE;
+  wakeUpStalled;
+  popTriggerQueue;
+}
+
+transition(EVWR_FWD_WAIT_DATA, CompleteTxn, I) {
+  deallocateTBE;
+  wakeUpStalled;
+  popTriggerQueue;
+}
+
 // WR_FWD_WAIT_DATA: write data from remote (inbound, C2C RX DAT -> local HN)
 transition(WR_FWD_WAIT_DATA, {DatIn_CBWrData_In, DatIn_NCBWrData_In}) {
-  forwardC2CDatToLocal;
+  trackDatFlit;
+  forwardC2CWrDatToLocal;
   returnDatCredit;
+  checkWriteBackTxnComplete;
   popC2CRxDatQueue;
+}
+
+transition(WR_FWD_WAIT_DATA, DatIn_WrData_Local) {
+  consumeDatCredit;
+  forwardLocalDatToC2C;
+  popDatInQueue;
 }
 
 // WR_FWD_WAIT_DATA: Comp from local HN (inbound, NoC RSP -> C2C TX)
@@ -404,6 +490,12 @@ transition(WR_FWD_WAIT_DATA, RspIn_Comp_In, I) {
   deallocateTBE;
   wakeUpStalled;
   popRspInQueue;
+}
+
+transition(WR_FWD_WAIT_DATA, CompleteTxn, I) {
+  deallocateTBE;
+  wakeUpStalled;
+  popTriggerQueue;
 }
 
 ////////////////////////////////////////////////////////////////////////////
@@ -573,9 +665,15 @@ transition(ATOMIC_ACTIVE, {DatIn_CBWrData_Out, DatIn_NCBWrData_Out}) {
 
 // Atomic write data from remote (inbound, C2C RX DAT -> local HN)
 transition(ATOMIC_ACTIVE, {DatIn_CBWrData_In, DatIn_NCBWrData_In}) {
-  forwardC2CDatToLocal;
+  forwardC2CWrDatToLocal;
   returnDatCredit;
   popC2CRxDatQueue;
+}
+
+transition(ATOMIC_ACTIVE, DatIn_WrData_Local) {
+  consumeDatCredit;
+  forwardLocalDatToC2C;
+  popDatInQueue;
 }
 
 transition(ATOMIC_ACTIVE, RetryAckFromHN, ATOMIC_RETRY_WAIT) {
@@ -598,21 +696,38 @@ transition(ATOMIC_RETRY_WAIT, PCrdGrantFromHN, ATOMIC_ACTIVE) {
 transition(I, OutSnp_Forward, SNP_WAIT_RESP) {
   allocateSnpTBE;
   recordSnpIDs_fromSnp;
+  recordOutboundSnpTargets;
   consumeSnpCredit;
   forwardSnpToC2CTx;
   popSnpInQueue;
 }
 
+transition(SNP_WAIT_RESP, RspIn_SnpResp_More) {
+  recordSnpRespNoData;
+  forwardC2CSnpRspToLocal;
+  returnRspCredit;
+  popC2CRxRspQueue;
+}
+
 // Snoop response (no data) from remote (C2C RX RSP -> return RSP credit)
 transition(SNP_WAIT_RESP, RspIn_SnpResp, I) {
+  recordSnpRespNoData;
   forwardC2CSnpRspToLocal;
   returnRspCredit;
   deallocateSnpTBE;
   popC2CRxRspQueue;
 }
 
+transition(SNP_WAIT_RESP, DatIn_SnpRespData_More) {
+  recordSnpRespDataFromC2C;
+  forwardC2CSnpDatToLocal;
+  returnDatCredit;
+  popC2CRxDatQueue;
+}
+
 // Snoop response with data from remote (C2C RX DAT -> return DAT credit)
 transition(SNP_WAIT_RESP, DatIn_SnpRespData, I) {
+  recordSnpRespDataFromC2C;
   forwardC2CSnpDatToLocal;
   returnDatCredit;
   deallocateSnpTBE;
@@ -624,21 +739,38 @@ transition(SNP_WAIT_RESP, DatIn_SnpRespData, I) {
 transition(I, InSnp_Deliver, INB_SNP_WAIT_RESP) {
   allocateSnpTBE;
   recordInboundSnpIDs;
+  recordInboundSnpTargets;
   forwardC2CSnpToLocal;
   returnSnpCredit;
   popC2CRxSnpQueue;
 }
 
+transition(INB_SNP_WAIT_RESP, RspIn_SnpResp_More) {
+  recordSnpRespNoData;
+  consumeRspCredit;
+  forwardLocalSnpRspToC2C;
+  popRspInQueue;
+}
+
 // Inbound snoop response (no data) from local cache
 transition(INB_SNP_WAIT_RESP, RspIn_SnpResp, I) {
+  recordSnpRespNoData;
   consumeRspCredit;
   forwardLocalSnpRspToC2C;
   deallocateSnpTBE;
   popRspInQueue;
 }
 
+transition(INB_SNP_WAIT_RESP, DatIn_SnpRespData_More) {
+  recordSnpRespDataFromLocal;
+  consumeDatCredit;
+  forwardLocalSnpDatToC2C;
+  popDatInQueue;
+}
+
 // Inbound snoop response with data from local cache
 transition(INB_SNP_WAIT_RESP, DatIn_SnpRespData, I) {
+  recordSnpRespDataFromLocal;
   consumeDatCredit;
   forwardLocalSnpDatToC2C;
   deallocateSnpTBE;
@@ -707,10 +839,10 @@ transition(DVM_WAIT_COMP, RspIn_Comp, I) {
 // Return: RSP credit on Comp from remote
 ////////////////////////////////////////////////////////////////////////////
 
-// Outbound write eligible for WritePush: buffer request, wait for data
+// Outbound writes with immediate local data availability use WritePush.
 transition(I, {OutReq_WriteNoSnpFull, OutReq_WriteNoSnpPtl,
-               OutReq_WriteUniqueFull, OutReq_WriteUniquePtl,
-               OutReq_WriteBackFull, OutReq_WriteCleanFull},
+         OutReq_WriteUniqueFull, OutReq_WriteUniquePtl,
+         OutReq_WriteCleanFull},
            WR_PUSH_WAIT_DATA) {
   allocateTBE;
   setOutbound;
@@ -784,9 +916,11 @@ transition(WR_PUSH_FWD_WAIT_COMP, RspIn_Comp_In, I) {
 ////////////////////////////////////////////////////////////////////////////
 
 transition({I, REQ_ACTIVE, ACTIVE_WAIT_DAT, ACTIVE_WAIT_COMP,
-            WR_ACTIVE_DBID, EVWR_WAIT_DBID, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
+            WR_ACTIVE_DBID, EVWR_WAIT_DBID, EVWR_WAIT_DATA,
+            EVWR_FWD_WAIT_DATA, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
             COMPACK_ACTIVE, DL_ACTIVE, EV_ACTIVE, ATOMIC_ACTIVE,
-            REQ_RETRY_WAIT, WR_RETRY_WAIT, DL_RETRY_WAIT, EV_RETRY_WAIT,
+            REQ_RETRY_WAIT, WR_RETRY_WAIT, EVWR_RETRY_WAIT,
+            DL_RETRY_WAIT, EV_RETRY_WAIT,
             ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT,
             SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
@@ -798,9 +932,11 @@ transition({I, REQ_ACTIVE, ACTIVE_WAIT_DAT, ACTIVE_WAIT_COMP,
 }
 
 transition({I, REQ_ACTIVE, ACTIVE_WAIT_DAT, ACTIVE_WAIT_COMP,
-            WR_ACTIVE_DBID, EVWR_WAIT_DBID, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
+            WR_ACTIVE_DBID, EVWR_WAIT_DBID, EVWR_WAIT_DATA,
+            EVWR_FWD_WAIT_DATA, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
             COMPACK_ACTIVE, DL_ACTIVE, EV_ACTIVE, ATOMIC_ACTIVE,
-            REQ_RETRY_WAIT, WR_RETRY_WAIT, DL_RETRY_WAIT, EV_RETRY_WAIT,
+            REQ_RETRY_WAIT, WR_RETRY_WAIT, EVWR_RETRY_WAIT,
+            DL_RETRY_WAIT, EV_RETRY_WAIT,
             ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT,
             SNP_WAIT_RESP, INB_SNP_WAIT_RESP,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
@@ -821,9 +957,11 @@ transition(SNP_WAIT_RESP, OutSnp_Forward) {
 }
 
 transition({REQ_ACTIVE, ACTIVE_WAIT_DAT, ACTIVE_WAIT_COMP,
-            WR_ACTIVE_DBID, EVWR_WAIT_DBID, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
+            WR_ACTIVE_DBID, EVWR_WAIT_DBID, EVWR_WAIT_DATA,
+            EVWR_FWD_WAIT_DATA, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
             COMPACK_ACTIVE, DL_ACTIVE, EV_ACTIVE, ATOMIC_ACTIVE,
-            REQ_RETRY_WAIT, WR_RETRY_WAIT, DL_RETRY_WAIT, EV_RETRY_WAIT,
+            REQ_RETRY_WAIT, WR_RETRY_WAIT, EVWR_RETRY_WAIT,
+            DL_RETRY_WAIT, EV_RETRY_WAIT,
             ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
             WR_PUSH_WAIT_DATA, WR_PUSH_SENT,

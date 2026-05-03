@@ -82,6 +82,10 @@ action(checkAllocateTBE, desc="Check TBE availability and move to reqRdy") {
   if (storTBEs.areNSlotsAvailable(1)) {
     storTBEs.incrementReserved();
     peek(reqInPort, CHIRequestMsg) {
+      DPRINTF(RubySlicc,
+              "checkAllocateTBE grant: addr=%#x type=%s requestor=%s allowRetry=%d\n",
+              in_msg.addr, in_msg.type, in_msg.requestor,
+              in_msg.allowRetry);
       enqueue(reqRdyOutPort, CHIRequestMsg, 0) {
         out_msg := in_msg;
       }
@@ -89,6 +93,9 @@ action(checkAllocateTBE, desc="Check TBE availability and move to reqRdy") {
   } else {
     peek(reqInPort, CHIRequestMsg) {
       assert(in_msg.allowRetry);
+      DPRINTF(RubySlicc,
+              "checkAllocateTBE retry: addr=%#x type=%s requestor=%s\n",
+              in_msg.addr, in_msg.type, in_msg.requestor);
       tbeFullRetries := tbeFullRetries + 1;
       enqueue(retryTriggerOutPort, RetryTriggerMsg, 0) {
         out_msg.addr := in_msg.addr;
@@ -104,6 +111,9 @@ action(checkAllocateTBE, desc="Check TBE availability and move to reqRdy") {
 action(checkAllocateTBE_withCredit, desc="TBE alloc after credit granted") {
   peek(reqInPort, CHIRequestMsg) {
     assert(in_msg.allowRetry == false);
+    DPRINTF(RubySlicc,
+            "checkAllocateTBE_withCredit: addr=%#x type=%s requestor=%s\n",
+            in_msg.addr, in_msg.type, in_msg.requestor);
     enqueue(reqRdyOutPort, CHIRequestMsg, 0) {
       out_msg := in_msg;
     }
@@ -233,6 +243,67 @@ action(recordInboundSnpIDs, "ribsnp",
   }
 }
 
+action(recordOutboundSnpTargets, "rosnp",
+       desc="Record expected responses for outbound snoop") {
+  assert(is_valid(tbe));
+  peek(snpInPort, CHIRequestMsg) {
+    if (in_msg.hasRmtDest) {
+      tbe.pendingSnpResps := in_msg.rmtDest.count();
+    } else {
+      tbe.pendingSnpResps := in_msg.Destination.count();
+    }
+    assert(tbe.pendingSnpResps > 0);
+  }
+}
+
+action(recordInboundSnpTargets, "risnp",
+       desc="Record expected responses for inbound snoop") {
+  assert(is_valid(tbe));
+  peek(c2cRxSnpInPort, CHIRequestMsg) {
+    if (in_msg.hasRmtDest) {
+      tbe.pendingSnpResps := in_msg.rmtDest.count();
+    } else {
+      tbe.pendingSnpResps := in_msg.Destination.count();
+    }
+    assert(tbe.pendingSnpResps > 0);
+  }
+}
+
+action(recordSnpRespNoData, "rsnpr",
+       desc="Consume one outstanding snoop response without data") {
+  assert(is_valid(tbe));
+  assert(tbe.pendingSnpResps > 0);
+  tbe.pendingSnpResps := tbe.pendingSnpResps - 1;
+}
+
+action(recordSnpRespDataFromC2C, "rsnpdc2c",
+       desc="Aggregate snoop response data from C2C") {
+  assert(is_valid(tbe));
+  peek(c2cRxDatInPort, CHIDataMsg) {
+    if (tbe.dataBlkValid.isEmpty()) {
+      assert(tbe.pendingSnpResps > 0);
+      tbe.pendingSnpResps := tbe.pendingSnpResps - 1;
+    }
+    assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
+    tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+    tbe.dataBlkValid.orMask(in_msg.bitMask);
+  }
+}
+
+action(recordSnpRespDataFromLocal, "rsnpdloc",
+       desc="Aggregate snoop response data from local NoC") {
+  assert(is_valid(tbe));
+  peek(datInPort, CHIDataMsg) {
+    if (tbe.dataBlkValid.isEmpty()) {
+      assert(tbe.pendingSnpResps > 0);
+      tbe.pendingSnpResps := tbe.pendingSnpResps - 1;
+    }
+    assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
+    tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+    tbe.dataBlkValid.orMask(in_msg.bitMask);
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////
 // Outbound forwarding to C2C link
 ////////////////////////////////////////////////////////////////////////////
@@ -313,7 +384,6 @@ action(forwardC2CSnpRspToLocal, "fwdC2CSnpRspL",
     enqueue(rspOutPort, CHIResponseMsg, response_latency) {
       out_msg := in_msg;
       out_msg.isC2C := false;
-      out_msg.responder := machineID;  // HN knows this C2CG, not peer
       out_msg.Destination.clear();
       out_msg.Destination.add(tbe.localSrcID);
     }
@@ -329,7 +399,6 @@ action(forwardC2CSnpDatToLocal, "fwdC2CSnpDatL",
     enqueue(datOutPort, CHIDataMsg, data_latency) {
       out_msg := in_msg;
       out_msg.isC2C := false;
-      out_msg.responder := machineID;  // HN knows this C2CG, not peer
       out_msg.Destination.clear();
       out_msg.Destination.add(tbe.localSrcID);
     }
@@ -395,6 +464,24 @@ action(forwardC2CDatToLocal, "fwdC2CDatL", desc="Forward C2C data to local NoC")
   }
 }
 
+action(forwardC2CWrDatToLocal, "fwdC2CWrDatL",
+       desc="Forward inbound C2C write data to local HN") {
+  assert(is_valid(tbe));
+  dat_onchip := dat_onchip + 1;
+  peek(c2cRxDatInPort, CHIDataMsg) {
+    enqueue(datOutPort, CHIDataMsg, data_latency) {
+      out_msg := in_msg;
+      out_msg.responder := tbe.remoteSrcID;
+      out_msg.txnId := intToAddress(tbe.storSlot);
+      out_msg.usesTxnId := false;
+      out_msg.isC2C := false;
+      out_msg.Destination.clear();
+      out_msg.Destination.add(
+          mapAddressToDownstreamMachine(tbe.addr));
+    }
+  }
+}
+
 action(forwardLocalRspToC2C, "fwdLRspC2C", desc="Forward local response to C2C") {
   assert(is_valid(tbe));
   peek(rspInPort, CHIResponseMsg) {
@@ -452,7 +539,6 @@ action(forwardLocalSnpRspToC2C, "fwdLSnpRspC2C",
   peek(rspInPort, CHIResponseMsg) {
     enqueue(c2cTxRspOutPort, CHIResponseMsg, response_latency) {
       out_msg := in_msg;
-      out_msg.responder := machineID;
       out_msg.isC2C := true;
       out_msg.c2cSrcGateway := machineID;
       out_msg.Destination.clear();
@@ -468,7 +554,6 @@ action(forwardLocalSnpDatToC2C, "fwdLSnpDatC2C",
   peek(datInPort, CHIDataMsg) {
     enqueue(c2cTxDatOutPort, CHIDataMsg, data_latency) {
       out_msg := in_msg;
-      out_msg.responder := machineID;
       out_msg.isC2C := true;
       out_msg.c2cSrcGateway := machineID;
       out_msg.Destination.clear();
@@ -488,9 +573,11 @@ action(forwardC2CSnpToLocal, "fwdC2CSnpL", desc="Forward C2C snoop to local") {
       out_msg.isC2C := false;
       out_msg.requestor := machineID;
       // Use rmtDest from HN to target the specific remote caches
+      NetDest localTargets := in_msg.rmtDest.AND(allUpstreamDest());
       out_msg.Destination.clear();
       assert(in_msg.hasRmtDest);
-      out_msg.Destination.addNetDest(in_msg.rmtDest);
+      assert(localTargets.count() > 0);
+      out_msg.Destination.addNetDest(localTargets);
     }
   }
 }
@@ -502,6 +589,9 @@ action(forwardC2CSnpToLocal, "fwdC2CSnpL", desc="Forward C2C snoop to local") {
 
 action(sendRetryAck, desc="Send RetryAck to requester") {
   peek(retryTriggerInPort, RetryTriggerMsg) {
+    DPRINTF(RubySlicc,
+            "sendRetryAck: addr=%#x retryDest=%s\n",
+            in_msg.addr, in_msg.retryDest);
     enqueue(rspOutPort, CHIResponseMsg, response_latency) {
       out_msg.addr := in_msg.addr;
       out_msg.type := CHIResponseType:RetryAck;
@@ -513,6 +603,9 @@ action(sendRetryAck, desc="Send RetryAck to requester") {
 
 action(sendPCrdGrant, desc="Send PCrdGrant to retrying requester") {
   peek(retryTriggerInPort, RetryTriggerMsg) {
+    DPRINTF(RubySlicc,
+            "sendPCrdGrant: addr=%#x retryDest=%s\n",
+            in_msg.addr, in_msg.retryDest);
     enqueue(rspOutPort, CHIResponseMsg, response_latency) {
       out_msg.addr := in_msg.addr;
       out_msg.type := CHIResponseType:PCrdGrant;
@@ -566,6 +659,29 @@ action(checkTxnComplete, "ctc",
        desc="If all data + CompAck done, trigger completion") {
   assert(is_valid(tbe));
   if (allDataFlitsForwarded(tbe) && tbe.compAckDone) {
+    enqueue(triggerOutPort, TriggerMsg, 0) {
+      out_msg.addr := address;
+      out_msg.event := Event:CompleteTxn;
+    }
+  }
+}
+
+action(checkDataTxnComplete, "cdtc",
+       desc="If all data flits done, trigger completion") {
+  assert(is_valid(tbe));
+  if (allDataFlitsForwarded(tbe)) {
+    enqueue(triggerOutPort, TriggerMsg, 0) {
+      out_msg.addr := address;
+      out_msg.event := Event:CompleteTxn;
+    }
+  }
+}
+
+action(checkWriteBackTxnComplete, "cwbtc",
+       desc="Complete WriteBackFull once all data flits are forwarded") {
+  assert(is_valid(tbe));
+  if ((tbe.reqType == CHIRequestType:WriteBackFull) &&
+      allDataFlitsForwarded(tbe)) {
     enqueue(triggerOutPort, TriggerMsg, 0) {
       out_msg.addr := address;
       out_msg.event := Event:CompleteTxn;
@@ -765,6 +881,9 @@ action(combineAndSendWritePush, "cwp",
     if (data_channel_size <= 32) {
       wpType := CHIDataType:WrReqDataS;
     }
+    DPRINTF(RubySlicc,
+            "combineAndSendWritePush: addr=%#x reqType=%s msgType=%s storSlot=%d\n",
+            address, tbe.reqType, wpType, tbe.storSlot);
     enqueue(c2cTxDatOutPort, CHIDataMsg, data_latency) {
       out_msg.addr := address;
       out_msg.type := wpType;

@@ -169,14 +169,20 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     ATOMIC_ACTIVE,     AccessPermission:Busy,
         desc="Atomic active, waiting for response (either direction)";
 
-    // Evict-write-specific state (always outbound; EVWR is not merged
-    // because it can receive early Comp before DBIDResp unlike normal writes)
+    // Evict-write-specific state (merged inbound/outbound; unlike normal
+    // writes, evict/clean writes can complete on Comp or on DBIDResp+data)
     EVWR_WAIT_DBID,    AccessPermission:Busy,
         desc="Evict/clean write waiting for DBIDResp or direct Comp";
 
     // Write completion wait states (not merged: semantically different)
+    //   EVWR_WAIT_DATA: outbound evict/clean write waiting only for local data
+    //   EVWR_FWD_WAIT_DATA: inbound evict/clean write waiting only for remote data
     //   WR_WAIT_COMP: outbound write sent data, awaiting Comp from remote HN
     //   WR_FWD_WAIT_DATA: inbound write DBIDResp forwarded, awaiting data from remote
+    EVWR_WAIT_DATA,    AccessPermission:Busy,
+        desc="Outbound evict/clean write: DBIDResp fwd'd, waiting for write data";
+    EVWR_FWD_WAIT_DATA, AccessPermission:Busy,
+        desc="Inbound evict/clean write: DBIDResp fwd'd to C2C, waiting for write data";
     WR_WAIT_COMP,      AccessPermission:Busy,
         desc="Outbound write: data forwarded to C2C, waiting for Comp";
     WR_FWD_WAIT_DATA,  AccessPermission:Busy,
@@ -187,6 +193,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
         desc="Inbound read retry waiting for PCrdGrant";
     WR_RETRY_WAIT,     AccessPermission:Busy,
         desc="Inbound write retry waiting for PCrdGrant";
+    EVWR_RETRY_WAIT,   AccessPermission:Busy,
+        desc="Inbound evict/clean write retry waiting for PCrdGrant";
     DL_RETRY_WAIT,     AccessPermission:Busy,
         desc="Inbound dataless retry waiting for PCrdGrant";
     EV_RETRY_WAIT,     AccessPermission:Busy,
@@ -256,6 +264,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     // Inbound request events (C2C -> local NoC)
     InReq_Read,                  desc="Inbound read from remote";
     InReq_Write,                 desc="Inbound write from remote";
+    InReq_EvictWrite,            desc="Inbound evict/clean write from remote";
     InReq_Dataless,              desc="Inbound dataless from remote";
     InReq_Evict,                 desc="Inbound Evict from remote";
     InReq_Atomic,                desc="Inbound atomic from remote";
@@ -273,7 +282,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     RspIn_CompAck,               desc="CompAck received (legacy)";
     RspIn_ReadReceipt,           desc="ReadReceipt received (legacy)";
     RspIn_RespSepData,           desc="RespSepData (split comp) received (legacy)";
-    RspIn_SnpResp,               desc="Snoop response (no data)";
+    RspIn_SnpResp,               desc="Final snoop response (no data)";
+    RspIn_SnpResp_More,          desc="Non-final snoop response (no data)";
 
     // Response events — directional (_Out = C2C RX or outbound context,
     //                               _In  = NoC RSP or inbound context)
@@ -290,7 +300,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     RspIn_RespSepData_In,        desc="RespSepData from local HN (inbound)";
 
     // Data events — non-directional (used by snoop path and WrReqData)
-    DatIn_SnpRespData,           desc="SnpRespData received";
+    DatIn_SnpRespData,           desc="Final SnpRespData flit received";
+    DatIn_SnpRespData_More,      desc="Non-final SnpRespData flit received";
     DatIn_WrReqData,             desc="WrReqDataS/L received from C2C";
 
     // Data events — directional
@@ -298,6 +309,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     DatIn_CompData_In,           desc="CompData from local HN (inbound read response)";
     DatIn_DataSepResp_Out,       desc="DataSepResp from C2C RX (outbound)";
     DatIn_DataSepResp_In,        desc="DataSepResp from local HN (inbound)";
+    DatIn_WrData_Remote,         desc="Write data from C2C RX for outbound transaction";
+    DatIn_WrData_Local,          desc="Write data from local NoC for inbound transaction";
     DatIn_CBWrData_Out,          desc="CBWrData from local RN via NoC (outbound write)";
     DatIn_CBWrData_In,           desc="CBWrData from remote via C2C RX (inbound write)";
     DatIn_NCBWrData_Out,         desc="NCBWrData from local RN via NoC (outbound)";

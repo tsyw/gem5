@@ -360,7 +360,14 @@ class AbstractController : public ClockedObject, public Consumer
         auto& m_outTrans =
           isAddressed ? m_outTransAddressed : m_outTransUnaddressed;
         auto iter = m_outTrans.find(addr);
-        assert(iter != m_outTrans.end());
+        // Some CHI response flows can reach profiling end actions more than
+        // once for the same line after the first completion already retired
+        // the bookkeeping entry. Treat those late duplicates as a no-op so
+        // experiments can continue while preserving the first completion
+        // sample.
+        if (iter == m_outTrans.end()) {
+            return;
+        }
         auto &trans = iter->second;
 
         auto stat_iter = stats.outTransLatHist.find(trans.transaction);

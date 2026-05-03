@@ -36,15 +36,15 @@ Creates two CHI sub-systems (Chip 0 and Chip 1), each with:
 
 The C2CGs are wired together via wireC2CLink(). With K C2CGs per chip,
 each C2CG pair (c2cg_i on chip0 ↔ c2cg_i on chip1) handles a
-non-overlapping partition of the remote address range.
+cache-line-address-hashed partition of the remote address range.
 
 Address space split:
   Chip 0 HNF owns [0x00000000, 0x80000000)   (lower 2 GiB)
   Chip 1 HNF owns [0x80000000, 0x100000000)  (upper 2 GiB)
 
-With K C2CGs per chip, remote range is split into K equal partitions:
-  Chip 0, C2CG i handles remote [2GiB + i*2GiB/K, 2GiB + (i+1)*2GiB/K)
-  Chip 1, C2CG i handles remote [0GiB + i*2GiB/K,       (i+1)*2GiB/K)
+With K C2CGs per chip, remote traffic is hashed using
+    c2cg_index = (addr >> 6) % K
+and implemented with interleaved AddrRanges over the remote chip range.
 
 Each RNF routes requests to the local HNF or the C2CG whose addr_range
 covers the destination address.
@@ -87,17 +87,29 @@ except ImportError:
     wireC2CLink = None
 
 
-def _partition_range(range_obj, num_parts):
-    """Split an AddrRange into num_parts equal non-overlapping sub-ranges."""
-    total = int(range_obj.size())
-    part_size = total // num_parts
-    start = int(range_obj.start)
-    parts = []
-    for i in range(num_parts):
-        p_start = start + i * part_size
-        p_size = part_size if i < num_parts - 1 else (total - i * part_size)
-        parts.append(AddrRange(p_start, size=p_size))
-    return parts
+def _partition_range(range_obj, num_parts, block_size_bits):
+    """Hash an AddrRange into power-of-two interleaved C2CG partitions."""
+    if num_parts <= 0:
+        raise ValueError("num_parts must be positive")
+    if num_parts == 1:
+        return [AddrRange(start=range_obj.start, size=range_obj.size())]
+    if num_parts & (num_parts - 1):
+        raise ValueError(
+            "C2CG address hashing requires a power-of-two gateway count"
+        )
+
+    intlv_bits = num_parts.bit_length() - 1
+    intlv_high_bit = block_size_bits + intlv_bits - 1
+    return [
+        AddrRange(
+            start=range_obj.start,
+            size=range_obj.size(),
+            intlvHighBit=intlv_high_bit,
+            intlvBits=intlv_bits,
+            intlvMatch=i,
+        )
+        for i in range(num_parts)
+    ]
 
 
 def _build_chip(
@@ -113,6 +125,7 @@ def _build_chip(
     full_range,
     interleave_idx,
     num_c2cgs=1,
+    num_tbes=32,
 ):
     """Build one chip's worth of CHI nodes.
 
@@ -141,11 +154,20 @@ def _build_chip(
 
     snf = CHI_SNF_MainMem(ruby_system, None, None)
 
-    # Create num_c2cgs C2CGs, each handling a partition of the remote range
-    remote_partitions = _partition_range(remote_range, num_c2cgs)
+    # Create num_c2cgs C2CGs, each handling a hash-selected remote partition.
+    remote_partitions = _partition_range(
+        remote_range,
+        num_c2cgs,
+        cache_line_size.bit_length() - 1,
+    )
     c2cgs = [CHI_C2CG(ruby_system, [part]) for part in remote_partitions]
     all_c2cg_cntrls = []
+    upstream_cache_destinations = [ctrl.version for ctrl in all_rnf_cntrls]
     for c2cg in c2cgs:
+        c2cg.getAllControllers()[0].number_of_TBEs = num_tbes
+        c2cg.getAllControllers()[
+            0
+        ].upstream_cache_destinations = upstream_cache_destinations
         all_c2cg_cntrls.extend(c2cg.getAllControllers())
 
     # Wire all C2CGs as extra upstream destinations for MN so that DVM
@@ -187,6 +209,7 @@ def build_two_chip_system(
     container_latency=1,
     num_c2cgs=1,
     txq_size=0,
+    num_tbes=32,
 ):
     """
     Build a two-chip CHI system with C2C gateways.
@@ -214,9 +237,9 @@ def build_two_chip_system(
         m5.fatal("CHI C2C config classes not available")
 
     if chip0_range is None:
-        chip0_range = AddrRange(0, size="2GiB")
+        chip0_range = AddrRange(start=0, size="2GiB")
     if chip1_range is None:
-        chip1_range = AddrRange("2GiB", size="2GiB")
+        chip1_range = AddrRange(start="2GiB", size="2GiB")
 
     full_range = [chip0_range, chip1_range]
     cache_line_size = system.cache_line_size.value
@@ -275,6 +298,7 @@ def build_two_chip_system(
             full_range,
             idx,
             num_c2cgs=num_c2cgs,
+            num_tbes=num_tbes,
         )
         network_nodes.extend(nodes)
         network_cntrls.extend(net_cntrls)
