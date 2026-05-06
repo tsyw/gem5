@@ -2290,7 +2290,7 @@ action(Receive_SnpDataResp, desc="") {
       error("Received unexpected message");
     }
     // Copy data to tbe only if we didn't have valid data or the received
-    // data is dirty
+    // data is dirty.
     if ((tbe.dataBlkValid.isFull() == false) ||
         (in_msg.type == CHIDataType:SnpRespData_I_PD) ||
         (in_msg.type == CHIDataType:SnpRespData_SC_PD) ||
@@ -2374,19 +2374,21 @@ action(UpdateDirState_FromSnpDataResp, desc="") {
   if (tbe.expected_snp_resp.hasReceivedData()) {
     assert(tbe.dataBlkValid.isFull());
     peek(datInPort, CHIDataMsg) {
+      MachineID actualResponder :=
+          getSnpDataResponderForDir(tbe, in_msg.responder);
 
       if (in_msg.type == CHIDataType:SnpRespData_I) {
-        assert(tbe.dir_sharers.isElement(in_msg.responder));
+        assert(tbe.dir_sharers.isElement(actualResponder));
         tbe.dir_ownerExists := false;
         tbe.dir_ownerIsExcl := false;
-        tbe.dir_sharers.remove(in_msg.responder);
+        tbe.dir_sharers.remove(actualResponder);
 
       } else if (in_msg.type == CHIDataType:SnpRespData_I_PD) {
-        assert(tbe.dir_ownerExists && (tbe.dir_owner == in_msg.responder));
-        assert(tbe.dir_sharers.isElement(in_msg.responder));
+        assert(tbe.dir_ownerExists && (tbe.dir_owner == actualResponder));
+        assert(tbe.dir_sharers.isElement(actualResponder));
         tbe.dir_ownerExists := false;
         tbe.dir_ownerIsExcl := false;
-        tbe.dir_sharers.remove(in_msg.responder);
+        tbe.dir_sharers.remove(actualResponder);
 
       } else if ((in_msg.type == CHIDataType:SnpRespData_SC_PD) ||
                  (in_msg.type == CHIDataType:SnpRespData_SC) ||
@@ -2396,8 +2398,8 @@ action(UpdateDirState_FromSnpDataResp, desc="") {
                  (in_msg.type == CHIDataType:SnpRespData_SD_Fwded_SC)) {
         // the owner must have been the responder, if there was one
         assert((tbe.dir_ownerExists == false) ||
-             (tbe.dir_ownerExists && (tbe.dir_owner == in_msg.responder)));
-        assert(tbe.dir_sharers.isElement(in_msg.responder));
+             (tbe.dir_ownerExists && (tbe.dir_owner == actualResponder)));
+        assert(tbe.dir_sharers.isElement(actualResponder));
         tbe.dir_ownerExists := false;
         tbe.dir_ownerIsExcl := false;
         if ((in_msg.type == CHIDataType:SnpRespData_SC_Fwded_SC) ||
@@ -2411,7 +2413,7 @@ action(UpdateDirState_FromSnpDataResp, desc="") {
           tbe.dir_owner := getRequestorForDir(tbe);
         } else if (in_msg.type == CHIDataType:SnpRespData_SD_Fwded_SC) {
           tbe.dir_ownerExists := true;
-          tbe.dir_owner := in_msg.responder;
+          tbe.dir_owner := actualResponder;
         }
 
       } else if ((in_msg.type == CHIDataType:SnpRespData_I_Fwded_SD_PD) ||
@@ -2419,11 +2421,11 @@ action(UpdateDirState_FromSnpDataResp, desc="") {
                  (in_msg.type == CHIDataType:SnpRespData_I_Fwded_SC)) {
         // the owner must have been the responder, if there was one
         assert((tbe.dir_ownerExists == false) ||
-             (tbe.dir_ownerExists && (tbe.dir_owner == in_msg.responder)));
-        assert(tbe.dir_sharers.isElement(in_msg.responder));
+             (tbe.dir_ownerExists && (tbe.dir_owner == actualResponder)));
+        assert(tbe.dir_sharers.isElement(actualResponder));
         tbe.dir_ownerExists := false;
         tbe.dir_ownerIsExcl := false;
-        tbe.dir_sharers.remove(in_msg.responder);
+        tbe.dir_sharers.remove(actualResponder);
         addRequestorToSharers(tbe);
         if (in_msg.type == CHIDataType:SnpRespData_I_Fwded_SD_PD) {
           tbe.dir_ownerExists := true;
@@ -2435,8 +2437,8 @@ action(UpdateDirState_FromSnpDataResp, desc="") {
                  (in_msg.type == CHIDataType:SnpRespData_UD)) {
         // expected only in response to a SnpOnce; just do some checks
         // also may get SnpRespData_SC, but handled properly above
-        assert(tbe.dir_ownerExists && (tbe.dir_owner == in_msg.responder));
-        assert(tbe.dir_sharers.isElement(in_msg.responder));
+        assert(tbe.dir_ownerExists && (tbe.dir_owner == actualResponder));
+        assert(tbe.dir_sharers.isElement(actualResponder));
 
       } else {
         error("Unsuported data type");
@@ -2644,11 +2646,11 @@ action(UpdateDirState_FromReqResp, desc="") {
         assert(tbe.dir_ownerExists == false);
         assert(tbe.requestorToBeExclusiveOwner == false);
         // C2C: owner is actual remote RN, not the C2CG proxy
+        MachineID newOwner := in_msg.responder;
         if (tbe.reqHasRmtDest) {
-          tbe.dir_owner := tbe.reqRmtDest.smallestElement();
-        } else {
-          tbe.dir_owner := in_msg.responder;
+          newOwner := tbe.reqRmtDest.smallestElement();
         }
+        tbe.dir_owner := newOwner;
         tbe.dir_ownerExists := true;
         tbe.dir_ownerIsExcl := false;
 
@@ -2656,11 +2658,11 @@ action(UpdateDirState_FromReqResp, desc="") {
         assert(tbe.dataMaybeDirtyUpstream);
         assert(tbe.dir_ownerExists == false);
         assert(tbe.dir_sharers.count() == 1);
+        MachineID newOwner := in_msg.responder;
         if (tbe.reqHasRmtDest) {
-          tbe.dir_owner := tbe.reqRmtDest.smallestElement();
-        } else {
-          tbe.dir_owner := in_msg.responder;
+          newOwner := tbe.reqRmtDest.smallestElement();
         }
+        tbe.dir_owner := newOwner;
         tbe.dir_ownerExists := true;
         tbe.dir_ownerIsExcl := true;
       }

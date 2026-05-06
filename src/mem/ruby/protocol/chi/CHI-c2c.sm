@@ -347,6 +347,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     bool isDataless,            desc="Is dataless transaction";
     bool isAtomic,              desc="Is atomic transaction";
     MachineID localSrcID,       desc="Local source MachineID";
+    MachineID localFwdRequestor, desc="Original forward requestor from local ingress";
     Addr localTxnID,            desc="Local TxnID";
     MachineID remoteSrcID,      desc="Remote source MachineID";
     Addr remoteTxnID,           desc="Remote TxnID";

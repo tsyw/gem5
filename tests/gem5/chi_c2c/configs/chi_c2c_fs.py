@@ -67,14 +67,37 @@ import m5
 from m5.objects import *
 from m5.util import addToPath
 
+
 # ------------------------------------------------------------------
 # Path setup — works for both in-tree and EXTRAS builds
 # ------------------------------------------------------------------
-_configs = os.path.join(m5.util.repoPath(), "configs")
-if not os.path.isdir(os.path.join(_configs, "common")):
+def _resolve_configs_dir():
+    candidates = [os.path.join(m5.util.repoPath(), "configs")]
+
     _src = os.environ.get("THIRD_PARTY_GEM5_SRCS_HOME", "")
     if _src:
-        _configs = os.path.join(_src, "configs")
+        candidates.append(os.path.join(_src, "configs"))
+
+    candidates.append(
+        os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            "..",
+            "..",
+            "..",
+            "configs",
+        )
+    )
+
+    for candidate in candidates:
+        candidate = os.path.realpath(candidate)
+        if os.path.isdir(os.path.join(candidate, "common")):
+            return candidate
+
+    raise ImportError("Unable to locate gem5 configs directory")
+
+
+_configs = _resolve_configs_dir()
 addToPath(_configs)
 addToPath(os.path.join(_configs, "example", "arm"))
 addToPath(os.path.join(_configs, "ruby"))
@@ -164,7 +187,11 @@ class _PaperSLC(RubyCache):
 class _PaperO3CPU(O3_ARM_v7a.O3_ARM_v7a_3):
     """O3 ARM CPU with SVE 2×256-bit (Table I)."""
 
-    sve_vl = _SVE_VL
+
+def _configure_sve(cpu):
+    for isa in getattr(cpu, "isa", []):
+        if hasattr(isa, "sve_vl_se"):
+            isa.sve_vl_se = _SVE_VL
 
 
 # ------------------------------------------------------------------
@@ -175,9 +202,24 @@ class _PaperO3CPU(O3_ARM_v7a.O3_ARM_v7a_3):
 # ------------------------------------------------------------------
 def _make_hbm2_ctrl(addr_range):
     """Return an HBMCtrl for one chip, covering addr_range."""
+    masks = [1 << 6]
     ctrl = HBMCtrl()
-    ctrl.dram = HBM_2000_4H_1x64(range=addr_range)
-    ctrl.dram_2 = HBM_2000_4H_1x64(range=addr_range)
+    ctrl.dram = HBM_2000_4H_1x64(
+        range=AddrRange(
+            start=addr_range.start,
+            size=addr_range.size(),
+            masks=masks,
+            intlvMatch=0,
+        )
+    )
+    ctrl.dram_2 = HBM_2000_4H_1x64(
+        range=AddrRange(
+            start=addr_range.start,
+            size=addr_range.size(),
+            masks=masks,
+            intlvMatch=1,
+        )
+    )
     return ctrl
 
 
@@ -209,10 +251,11 @@ def _build_r1(ruby_system, cache_line_size, cpus, mem_range, num_hnfs=4):
         snf = CHI_SNF_MainMem(ruby_system, None, None)
         snfs.append(snf)
         numa_ranges.append(
-            AddrRange(mem_range.start + i * numa_size, size=numa_size)
+            AddrRange(
+                start=mem_range.start + i * numa_size,
+                size=numa_size,
+            )
         )
-
-    mn = CHI_MN(ruby_system)
 
     all_hnf_cntrls = []
     for hnf in hnfs:
@@ -223,17 +266,21 @@ def _build_r1(ruby_system, cache_line_size, cpus, mem_range, num_hnfs=4):
         all_snf_cntrls.extend(snf.getAllControllers())
 
     rnfs = []
+    all_rnf_cntrls = []
     for cpu in cpus:
         rnf = CHI_RNF(
             [cpu],
             ruby_system,
             _PaperL1I,
             _PaperL1D,
-            _PaperL2,
             cache_line_size,
         )
+        rnf.addPrivL2Cache(_PaperL2)
         rnf.setDownstream(all_hnf_cntrls)
         rnfs.append(rnf)
+        all_rnf_cntrls.extend(rnf.getAllControllers())
+
+    mn = CHI_MN(ruby_system, all_rnf_cntrls)
 
     for hnf in hnfs:
         hnf.setDownstream(all_snf_cntrls)
@@ -244,6 +291,9 @@ def _build_r1(ruby_system, cache_line_size, cpus, mem_range, num_hnfs=4):
     for node in network_nodes:
         all_cntrls.extend(node.getAllControllers())
         network_cntrls.extend(node.getNetworkSideControllers())
+
+    for cntrl in all_cntrls:
+        cntrl.data_channel_size = NoC_Params.data_width
 
     cpu_seqs = []
     for rnf in rnfs:
@@ -297,6 +347,7 @@ def build_fs_system(args):
     cpus = []
     for i in range(num_cores):
         cpu = _PaperO3CPU(cpu_id=i)
+        _configure_sve(cpu)
         cpu.createThreads()
         cpu.clk_domain = SrcClockDomain(
             clock=_CPU_FREQ, voltage_domain=system.voltage_domain
@@ -339,7 +390,7 @@ def build_fs_system(args):
 
     # ------ CHI topology ------
     if topology == "R1":
-        mem_range = AddrRange(size=args.mem_size)
+        mem_range = AddrRange(args.mem_size)
         (
             net_nodes,
             net_cntrls,
@@ -357,10 +408,10 @@ def build_fs_system(args):
 
     else:  # R2
         # args.mem_size is a string like "8GiB"; split evenly via AddrRange
-        full_range = AddrRange(size=args.mem_size)
+        full_range = AddrRange(args.mem_size)
         half = full_range.size() // 2
-        chip0_range = AddrRange(0, size=half)
-        chip1_range = AddrRange(half, size=half)
+        chip0_range = AddrRange(start=0, size=half)
+        chip1_range = AddrRange(start=half, size=half)
         mem_ranges = [chip0_range, chip1_range]
 
         (
@@ -391,6 +442,11 @@ def build_fs_system(args):
         SimpleExtLink,
         Switch,
     )
+    system.ruby.network.number_of_virtual_networks = 4
+    system.ruby.network.control_msg_size = NoC_Params.cntrl_msg_size
+    system.ruby.network.data_msg_size = NoC_Params.data_width
+    if getattr(args, "network", "simple") == "simple":
+        system.ruby.network.buffer_size = NoC_Params.router_buffer_size
     system.ruby.network.setup_buffers()
 
     # ------ Ruby system parameters ------

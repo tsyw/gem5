@@ -409,6 +409,8 @@ void initializeTBE(TBE tbe, Addr addr, int storSlot) {
   tbe.doCacheFill := false;
 
   tbe.pendReqType := CHIRequestType:null;
+  tbe.pendReqHasRmtDest := false;
+  tbe.pendReqRmtDest.clear();
 
   tbe.pendAction := Event:null;
   tbe.finalState := State:null;
@@ -771,6 +773,27 @@ MachineID getReqDataResponderForDir(TBE tbe, MachineID responder) {
   return responder;
 }
 
+// Snoop response data forwarded via C2CG also arrives with responder set to the
+// gateway. Recover the actual remote RN when the directory still tracks a
+// single remote sharer or an owner behind that gateway.
+MachineID getSnpDataResponderForDir(TBE tbe, MachineID responder) {
+  if (tbe.dir_c2cGateways.isElement(responder)) {
+    if (tbe.dir_ownerExists &&
+        tbe.dir_c2cSharerGateways.contains(tbe.dir_owner) &&
+        (tbe.dir_c2cSharerGateways.lookup(tbe.dir_owner) == responder)) {
+      return tbe.dir_owner;
+    }
+
+    NetDest remoteSharers := tbe.dir_c2cSharerGateways.sharersForGateway(
+        tbe.dir_c2cRemoteSharers, responder);
+    if (remoteSharers.count() == 1) {
+      return remoteSharers.smallestElement();
+    }
+  }
+
+  return responder;
+}
+
 void removeDirSharer(TBE tbe, MachineID sharer) {
   if (tbe.dir_c2cSharerGateways.contains(sharer)) {
     MachineID gateway := tbe.dir_c2cSharerGateways.lookup(sharer);
@@ -802,6 +825,8 @@ void allowRequestRetry(TBE tbe, CHIRequestMsg & out_msg) {
   tbe.pendReqAccAddr := out_msg.accAddr;
   tbe.pendReqAccSize := out_msg.accSize;
   tbe.pendReqDest := out_msg.Destination;
+  tbe.pendReqHasRmtDest := out_msg.hasRmtDest;
+  tbe.pendReqRmtDest := out_msg.rmtDest;
   tbe.pendReqD2OrigReq := out_msg.dataToFwdRequestor;
   tbe.pendReqRetToSrc := out_msg.retToSrc;
 }
@@ -818,6 +843,8 @@ void prepareRequestRetry(TBE tbe, CHIRequestMsg & out_msg) {
   out_msg.accSize := tbe.pendReqAccSize;
   out_msg.type := tbe.pendReqType;
   out_msg.Destination := tbe.pendReqDest;
+  out_msg.hasRmtDest := tbe.pendReqHasRmtDest;
+  out_msg.rmtDest := tbe.pendReqRmtDest;
   out_msg.dataToFwdRequestor := tbe.pendReqD2OrigReq;
   out_msg.retToSrc := tbe.pendReqRetToSrc;
   out_msg.isSeqReqValid := tbe.isSeqReqValid;
@@ -842,6 +869,8 @@ void prepareRequestRetryDVM(TBE tbe, CHIRequestMsg & out_msg) {
   out_msg.accSize := tbe.pendReqAccSize;
   out_msg.type := tbe.pendReqType;
   out_msg.Destination := tbe.pendReqDest;
+  out_msg.hasRmtDest := tbe.pendReqHasRmtDest;
+  out_msg.rmtDest := tbe.pendReqRmtDest;
   out_msg.dataToFwdRequestor := tbe.pendReqD2OrigReq;
   out_msg.retToSrc := tbe.pendReqRetToSrc;
   out_msg.isSeqReqValid := tbe.isSeqReqValid;

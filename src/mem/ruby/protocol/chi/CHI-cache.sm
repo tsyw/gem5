@@ -790,6 +790,8 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     Addr pendReqAccAddr;
     int pendReqAccSize;
     NetDest pendReqDest;
+    bool pendReqHasRmtDest;
+    NetDest pendReqRmtDest;
     bool pendReqD2OrigReq;
     bool pendReqRetToSrc;
 

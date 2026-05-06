@@ -344,7 +344,11 @@ in_port(snpInPort, CHIRequestMsg, snpIn, rank=6) {
         creditMgr.recordStall(1);  // CLS_SNP=1
         snpInPort.recycle(clockEdge(),
                           cyclesToTicks(stall_recycle_lat));
+      } else if (storSnpTBEs.areNSlotsAvailable(1) == false) {
+        snpInPort.recycle(clockEdge(),
+                          cyclesToTicks(stall_recycle_lat));
       } else {
+        storSnpTBEs.incrementReserved();
         trigger(Event:OutSnp_Forward, in_msg.addr,
                 snpTBEs[in_msg.addr]);
       }

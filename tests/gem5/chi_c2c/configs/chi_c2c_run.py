@@ -167,8 +167,8 @@ elif args.test_type == "Invalidate":
 else:
     m5.fatal("Unknown test type: %s" % args.test_type)
 
-chip0_range = AddrRange(0, size="2GiB")
-chip1_range = AddrRange("2GiB", size="2GiB")
+chip0_range = AddrRange(start=0, size="2GiB")
+chip1_range = AddrRange(start="2GiB", size="2GiB")
 
 system = System(mem_ranges=[chip0_range, chip1_range])
 system.voltage_domain = VoltageDomain(voltage=args.sys_voltage)

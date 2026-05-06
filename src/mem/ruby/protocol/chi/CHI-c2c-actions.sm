@@ -171,6 +171,9 @@ action(deallocateTBE, "dtbe", desc="Deallocate TBE") {
 }
 
 action(allocateSnpTBE, "asnptbe", desc="Allocate snoop TBE") {
+  // Snoop TBEs are reserved in the snoop port handlers before the
+  // transition fires, so consume that reservation before allocating.
+  storSnpTBEs.decrementReserved();
   assert(storSnpTBEs.areNSlotsAvailable(1));
   snpTBEs.allocate(address);
   set_tbe(snpTBEs[address]);
@@ -200,6 +203,7 @@ action(recordLocalIDs_fromReq, "rlid", desc="Record local IDs from request") {
   peek(reqRdyInPort, CHIRequestMsg) {
     tbe.reqType := in_msg.type;
     tbe.localSrcID := in_msg.requestor;
+    tbe.localFwdRequestor := in_msg.fwdRequestor;
     tbe.localTxnID := in_msg.txnId;
     tbe.remoteSrcID := machineID;
     tbe.isRead := isReadRequest(in_msg.type);
@@ -318,7 +322,9 @@ action(forwardReqToC2CTx, "fwdReqC2C", desc="Forward request to C2C TX REQ") {
       out_msg.txnId := intToAddress(tbe.storSlot);
       out_msg.usesTxnId := true;
       out_msg.isC2C := true;
-      out_msg.origSrcID := tbe.localSrcID;
+      // Keep the stable remote cache identity in origSrcID; fwdRequestor
+      // still carries the inner target for data forwarding within the node.
+      out_msg.origSrcID := in_msg.requestor;
       out_msg.origTxnId := tbe.localTxnID;
       out_msg.c2cSrcGateway := machineID;
       out_msg.allowRetry := false;  // no retry across C2C
@@ -568,12 +574,12 @@ action(forwardC2CSnpToLocal, "fwdC2CSnpL", desc="Forward C2C snoop to local") {
   assert(is_valid(tbe));
   snp_onchip := snp_onchip + 1;
   peek(c2cRxSnpInPort, CHIRequestMsg) {
+    NetDest localTargets := in_msg.rmtDest.AND(allUpstreamDest());
     enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
       out_msg := in_msg;
       out_msg.isC2C := false;
       out_msg.requestor := machineID;
       // Use rmtDest from HN to target the specific remote caches
-      NetDest localTargets := in_msg.rmtDest.AND(allUpstreamDest());
       out_msg.Destination.clear();
       assert(in_msg.hasRmtDest);
       assert(localTargets.count() > 0);
@@ -589,9 +595,6 @@ action(forwardC2CSnpToLocal, "fwdC2CSnpL", desc="Forward C2C snoop to local") {
 
 action(sendRetryAck, desc="Send RetryAck to requester") {
   peek(retryTriggerInPort, RetryTriggerMsg) {
-    DPRINTF(RubySlicc,
-            "sendRetryAck: addr=%#x retryDest=%s\n",
-            in_msg.addr, in_msg.retryDest);
     enqueue(rspOutPort, CHIResponseMsg, response_latency) {
       out_msg.addr := in_msg.addr;
       out_msg.type := CHIResponseType:RetryAck;
@@ -603,9 +606,6 @@ action(sendRetryAck, desc="Send RetryAck to requester") {
 
 action(sendPCrdGrant, desc="Send PCrdGrant to retrying requester") {
   peek(retryTriggerInPort, RetryTriggerMsg) {
-    DPRINTF(RubySlicc,
-            "sendPCrdGrant: addr=%#x retryDest=%s\n",
-            in_msg.addr, in_msg.retryDest);
     enqueue(rspOutPort, CHIResponseMsg, response_latency) {
       out_msg.addr := in_msg.addr;
       out_msg.type := CHIResponseType:PCrdGrant;
@@ -628,9 +628,25 @@ action(reissueRequest, "reis", desc="Re-issue request after PCrdGrant") {
     out_msg.addr := tbe.addr;
     out_msg.type := tbe.reqType;
     out_msg.requestor := machineID;
+    out_msg.fwdRequestor := tbe.localSrcID;
+    if (tbe.isOutbound == false) {
+      out_msg.fwdRequestor := tbe.remoteSrcID;
+    } else if (machineIDToMachineType(tbe.localFwdRequestor) == MachineType:Cache) {
+      out_msg.fwdRequestor := tbe.localFwdRequestor;
+    }
     out_msg.txnId := intToAddress(tbe.storSlot);
     out_msg.usesTxnId := false;  // HNF expects false for non-DVM
     out_msg.allowRetry := false;  // already have credit
+    out_msg.hasRmtDest := true;
+    out_msg.rmtDest.clear();
+    out_msg.rmtDest.add(tbe.localSrcID);
+    if (tbe.isOutbound == false) {
+      out_msg.rmtDest.clear();
+      out_msg.rmtDest.add(tbe.remoteSrcID);
+    } else if (machineIDToMachineType(tbe.localFwdRequestor) == MachineType:Cache) {
+      out_msg.rmtDest.clear();
+      out_msg.rmtDest.add(tbe.localFwdRequestor);
+    }
     out_msg.Destination.clear();
     out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
   }
@@ -881,13 +897,10 @@ action(combineAndSendWritePush, "cwp",
     if (data_channel_size <= 32) {
       wpType := CHIDataType:WrReqDataS;
     }
-    DPRINTF(RubySlicc,
-            "combineAndSendWritePush: addr=%#x reqType=%s msgType=%s storSlot=%d\n",
-            address, tbe.reqType, wpType, tbe.storSlot);
     enqueue(c2cTxDatOutPort, CHIDataMsg, data_latency) {
       out_msg.addr := address;
       out_msg.type := wpType;
-      out_msg.responder := machineID;
+      out_msg.responder := tbe.localSrcID;
       out_msg.dataBlk := in_msg.dataBlk;
       out_msg.bitMask := in_msg.bitMask;
       out_msg.txnId := intToAddress(tbe.storSlot);
@@ -927,6 +940,9 @@ action(splitWrReqDataToReq, "swrr",
       out_msg.usesTxnId := false;  // HNF expects false for non-DVM
       out_msg.isC2C := false;
       out_msg.allowRetry := true;
+      out_msg.hasRmtDest := true;
+      out_msg.rmtDest.clear();
+      out_msg.rmtDest.add(in_msg.responder);
       out_msg.Destination.clear();
       out_msg.Destination.add(
           mapAddressToDownstreamMachine(in_msg.addr));
