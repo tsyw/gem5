@@ -757,6 +757,34 @@ void removeRequestorFromSharers(TBE tbe) {
   }
 }
 
+// CopyBackWrData forwarded via C2CG arrives with responder set to the
+// gateway. Recover the actual remote RN from the request metadata so HN
+// directory checks stay aligned with the tracked owner/sharer state.
+MachineID getReqDataResponderForDir(TBE tbe, MachineID responder) {
+  if (tbe.dir_c2cGateways.isElement(responder)) {
+    MachineID actualResponder := getRequestorForDir(tbe);
+    assert(tbe.dir_c2cSharerGateways.contains(actualResponder));
+    assert(tbe.dir_c2cSharerGateways.lookup(actualResponder) == responder);
+    return actualResponder;
+  }
+
+  return responder;
+}
+
+void removeDirSharer(TBE tbe, MachineID sharer) {
+  if (tbe.dir_c2cSharerGateways.contains(sharer)) {
+    MachineID gateway := tbe.dir_c2cSharerGateways.lookup(sharer);
+    tbe.dir_sharers.remove(sharer);
+    tbe.dir_c2cRemoteSharers.remove(sharer);
+    tbe.dir_c2cSharerGateways.remove(sharer);
+    if (tbe.dir_c2cSharerGateways.countGatewayUsers(gateway) == 0) {
+      tbe.dir_c2cGateways.remove(gateway);
+    }
+  } else {
+    tbe.dir_sharers.remove(sharer);
+  }
+}
+
 void prepareRequestAtomic(TBE tbe, CHIRequestType type,
                           CHIRequestMsg & out_msg) {
   assert((type == CHIRequestType:AtomicReturn) ||

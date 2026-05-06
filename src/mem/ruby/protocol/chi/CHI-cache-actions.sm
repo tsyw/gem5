@@ -797,7 +797,6 @@ action(Finish_CleanUnique, desc="") {
     tbe.actions.push(Event:WaitCompAck);
     tbe.actions.push(Event:TagArrayWrite);
   } else {
-    // must be the only one in sharers map
     assert(tbe.dir_sharers.count() == 1);
     assert(tbe.dataUnique);
 
@@ -1868,6 +1867,13 @@ action(Send_SnpCleanInvalid, desc="") {
 action(Send_SnpCleanInvalid_NoReq, desc="") {
   assert(is_valid(tbe));
   assert(tbe.expected_snp_resp.hasExpected() == false);
+  int expectedTargets := tbe.dir_sharers.count();
+  if (tbe.reqHasRmtDest) {
+    expectedTargets := expectedTargets - tbe.reqRmtDest.count();
+  } else {
+    expectedTargets := expectedTargets - 1;
+  }
+  assert(expectedTargets > 0);
   enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
     prepareRequest(tbe, CHIRequestType:SnpCleanInvalid, out_msg);
     out_msg.Destination.addNetDest(tbe.dir_sharers);
@@ -1892,7 +1898,7 @@ action(Send_SnpCleanInvalid_NoReq, desc="") {
     out_msg.retToSrc := false;
     out_msg.ns := tbe.ns;
     setExpectedForInvSnoop(tbe, false);
-    tbe.expected_snp_resp.setExpectedCount(out_msg.Destination.count());
+    tbe.expected_snp_resp.setExpectedCount(expectedTargets);
   }
 }
 
@@ -2309,43 +2315,50 @@ action(UpdateDirState_FromReqDataResp, desc="") {
   if (tbe.expected_req_resp.hasReceivedData()) {
     assert(tbe.dataBlkValid.isFull());
     peek(datInPort, CHIDataMsg) {
+      MachineID actualResponder :=
+          getReqDataResponderForDir(tbe, in_msg.responder);
 
       if (in_msg.type == CHIDataType:CBWrData_UC) {
-        assert(tbe.dir_ownerExists && tbe.dir_ownerIsExcl && (tbe.dir_owner == in_msg.responder));
-        assert(tbe.dir_sharers.isElement(in_msg.responder));
+        assert(tbe.dir_ownerExists && tbe.dir_ownerIsExcl &&
+               (tbe.dir_owner == actualResponder));
+        assert(tbe.dir_sharers.isElement(actualResponder));
         tbe.dir_ownerExists := false;
         tbe.dir_ownerIsExcl := false;
-        tbe.dir_sharers.remove(in_msg.responder);
+        removeDirSharer(tbe, actualResponder);
 
       } else if (in_msg.type == CHIDataType:CBWrData_UD_PD) {
-        assert(tbe.dir_ownerExists && tbe.dir_ownerIsExcl && (tbe.dir_owner == in_msg.responder));
-        assert(tbe.dir_sharers.isElement(in_msg.responder));
+        assert(tbe.dir_ownerExists && tbe.dir_ownerIsExcl &&
+               (tbe.dir_owner == actualResponder));
+        assert(tbe.dir_sharers.isElement(actualResponder));
         if (tbe.reqType != CHIRequestType:WriteCleanFull) {
           tbe.dir_ownerExists := false;
           tbe.dir_ownerIsExcl := false;
-          tbe.dir_sharers.remove(in_msg.responder);
+          removeDirSharer(tbe, actualResponder);
         }
 
       } else if (in_msg.type == CHIDataType:CBWrData_SC) {
-        assert((tbe.dir_ownerExists == false) || (tbe.dir_owner != in_msg.responder));
+        assert((tbe.dir_ownerExists == false) ||
+               (tbe.dir_owner != actualResponder));
         // Do not remove the responder in case of stale WriteCleanFull
         if (tbe.reqType != CHIRequestType:WriteCleanFull) {
-          tbe.dir_sharers.remove(in_msg.responder);
+          removeDirSharer(tbe, actualResponder);
         }
 
       } else if (in_msg.type == CHIDataType:CBWrData_SD_PD) {
-        assert(tbe.dir_ownerExists && (tbe.dir_ownerIsExcl == false) && (tbe.dir_owner == in_msg.responder));
-        assert(tbe.dir_sharers.isElement(in_msg.responder));
+        assert(tbe.dir_ownerExists && (tbe.dir_ownerIsExcl == false) &&
+               (tbe.dir_owner == actualResponder));
+        assert(tbe.dir_sharers.isElement(actualResponder));
         tbe.dir_ownerExists := false;
         tbe.dir_ownerIsExcl := false;
         if (tbe.reqType != CHIRequestType:WriteCleanFull) {
-          tbe.dir_sharers.remove(in_msg.responder);
+          removeDirSharer(tbe, actualResponder);
         }
 
       } else if (in_msg.type == CHIDataType:CBWrData_I) {
         // nothing to do here; just check
-        assert((tbe.dir_ownerExists == false) || (tbe.dir_owner != in_msg.responder));
-        assert(tbe.dir_sharers.isElement(in_msg.responder) == false);
+        assert((tbe.dir_ownerExists == false) ||
+               (tbe.dir_owner != actualResponder));
+        assert(tbe.dir_sharers.isElement(actualResponder) == false);
 
       } else {
         error("Unsuported data type");
