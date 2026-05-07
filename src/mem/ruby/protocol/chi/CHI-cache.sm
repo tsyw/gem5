@@ -641,6 +641,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   structure(RetryQueueEntry) {
     Addr addr,           desc="Line address";
     bool usesTxnId,      desc="Uses a transaction ID instead of a memory address";
+    Addr txnId,          desc="Retry transaction ID", default="-1";
     MachineID retryDest, desc="Retry destination";
     uint8_t lpid,        desc="Retry destination";
   }

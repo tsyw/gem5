@@ -293,6 +293,16 @@ def build_four_chip_system(
                         bridges[1],
                     )
 
+    peer_cache_destinations = []
+    for chip_rnfs in rnfs:
+        peer_cache_destinations.append(
+            [
+                ctrl.version
+                for rnf in chip_rnfs
+                for ctrl in rnf.getAllControllers()
+            ]
+        )
+
     for chip_idx in range(4):
         all_c2cg_cntrls = []
         for remote_chip in sorted(c2cgs[chip_idx]):
@@ -304,6 +314,11 @@ def build_four_chip_system(
         hnfs[chip_idx].setDownstream(snfs[chip_idx].getAllControllers())
         for remote_chip in sorted(c2cgs[chip_idx]):
             for c2cg in c2cgs[chip_idx][remote_chip]:
+                c2cg.getAllControllers()[
+                    0
+                ].peer_upstream_cache_destinations = list(
+                    peer_cache_destinations[remote_chip]
+                )
                 c2cg.setDownstream(hnfs[chip_idx].getAllControllers())
 
     for cntrl in all_cntrls:

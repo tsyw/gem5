@@ -319,6 +319,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     // Retry handling
     RetryAckFromHN,              desc="RetryAck from local HN (absorb)";
     PCrdGrantFromHN,             desc="PCrdGrant from local HN";
+    EarlyPCrdGrantFromHN,        desc="PCrdGrant from local HN before RetryAck";
+    RetryAckWithGrantFromHN,     desc="RetryAck from local HN after PCrdGrant";
     SendRetryAck,                desc="Send RetryAck to requester";
     SendPCrdGrant,               desc="Send PCrdGrant to requester";
 
@@ -333,6 +335,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
   // Cache block size
   int blockSize, default="m_ruby_system->getBlockSizeBytes()";
+    Addr nextTxnID, default="1";
 
   // TBE: Transaction Buffer Entry
   structure(TBE, desc="C2C Gateway Transaction Buffer Entry") {
@@ -349,6 +352,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     MachineID localSrcID,       desc="Local source MachineID";
     MachineID localFwdRequestor, desc="Original forward requestor from local ingress";
     Addr localTxnID,            desc="Local TxnID";
+    Addr txnID,                 desc="TxnID used when forwarding to local HN";
     MachineID remoteSrcID,      desc="Remote source MachineID";
     Addr remoteTxnID,           desc="Remote TxnID";
     MachineID peerC2CG,         desc="Peer C2CG on remote chip";
@@ -356,6 +360,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     bool expectingComp,         desc="Waiting for completion";
     int pendingSnpResps,        desc="Outstanding snoop responses";
     bool retryPending,          desc="HN sent RetryAck";
+    bool retryGrantPending,     desc="HN sent PCrdGrant";
     int resPlane,               desc="Resource Plane assignment";
     bool usedSharedCredit,      desc="Used shared credit pool";
     Tick allocTime,             desc="Cycle when allocated";

@@ -40,6 +40,7 @@ void unset_tbe();
 void wakeUpAllBuffers(Addr a);
 MachineID mapAddressToDownstreamMachine(Addr addr);
 NetDest allUpstreamDest();
+NetDest allPeerUpstreamDest();
 
 ////////////////////////////////////////////////////////////////////////////
 // Interface functions required by SLICC
@@ -411,7 +412,9 @@ void clearTBEDefaults(TBE tbe) {
   tbe.isDataless := false;
   tbe.isAtomic := false;
   tbe.isOutbound := false;
+  tbe.txnID := intToAddress(0);
   tbe.retryPending := false;
+  tbe.retryGrantPending := false;
   tbe.expectingData := false;
   tbe.expectingComp := false;
   tbe.resPlane := 0;
@@ -421,6 +424,14 @@ void clearTBEDefaults(TBE tbe) {
   tbe.rxtxBytes := 0;
   tbe.pendingSnpResps := 0;
   tbe.compAckDone := false;
+}
+
+void assignTxnID(TBE tbe) {
+  tbe.txnID := nextTxnID;
+  nextTxnID := intToAddress(addressToInt(nextTxnID) + 1);
+  if (nextTxnID == intToAddress(0)) {
+    nextTxnID := intToAddress(1);
+  }
 }
 
 // Directional event mapping: outbound context (C2C RX RSP or CompAck from local RN)

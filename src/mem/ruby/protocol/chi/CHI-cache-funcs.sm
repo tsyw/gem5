@@ -902,6 +902,7 @@ void processRetryQueue() {
     enqueue(retryTriggerOutPort, RetryTriggerMsg, 0) {
       out_msg.addr := e.addr;
       out_msg.usesTxnId := e.usesTxnId;
+      out_msg.txnId := e.txnId;
       out_msg.retryDest := e.retryDest;
       out_msg.event := Event:SendPCrdGrant;
       out_msg.lpid := e.lpid;

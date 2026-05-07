@@ -239,6 +239,13 @@ class AbstractController : public ClockedObject, public Consumer
     /** List of upstream destinations (towards the CPU) */
     const NetDest& allUpstreamDest() const { return upstreamDestinations; }
 
+    /** Cache destinations reachable through the peer C2C gateway. */
+    const NetDest &
+    allPeerUpstreamDest() const
+    {
+        return peerUpstreamDestinations;
+    }
+
     // Helper methods for commonly used functions called in common/address.hh
     Addr getOffset(Addr addr) const;
     Addr makeLineAddress(Addr addr) const;
@@ -490,6 +497,7 @@ class AbstractController : public ClockedObject, public Consumer
 
     NetDest downstreamDestinations;
     NetDest upstreamDestinations;
+    NetDest peerUpstreamDestinations;
 
     void sendRetryRespToMem();
     MemberEventWrapper<&AbstractController::sendRetryRespToMem> mRetryRespEvent;

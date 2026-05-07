@@ -336,6 +336,16 @@ def build_two_chip_system(
             all_bridges.append(bridges)
 
     # Downstream routing
+    peer_cache_destinations = []
+    for chip_rnfs in rnfs:
+        peer_cache_destinations.append(
+            [
+                ctrl.version
+                for rnf in chip_rnfs
+                for ctrl in rnf.getAllControllers()
+            ]
+        )
+
     for i in range(2):
         all_c2cg_cntrls = []
         for c2cg in c2cgs[i]:
@@ -346,6 +356,9 @@ def build_two_chip_system(
         hnfs[i].setDownstream(snfs[i].getAllControllers())
         # Each C2CG forwards inbound remote requests to the local HNF
         for c2cg in c2cgs[i]:
+            c2cg.getAllControllers()[0].peer_upstream_cache_destinations = (
+                list(peer_cache_destinations[1 - i])
+            )
             c2cg.setDownstream(hnfs[i].getAllControllers())
 
     # Data message size

@@ -282,6 +282,17 @@ transition(REQ_ACTIVE, RetryAckFromHN, REQ_RETRY_WAIT) {
   popRspInQueue;
 }
 
+transition(REQ_ACTIVE, EarlyPCrdGrantFromHN, REQ_ACTIVE) {
+  recordPCrdGrant;
+  popRspInQueue;
+}
+
+transition(REQ_ACTIVE, RetryAckWithGrantFromHN, REQ_ACTIVE) {
+  recordPCrdType;
+  reissueRequest;
+  popRspInQueue;
+}
+
 transition(REQ_RETRY_WAIT, PCrdGrantFromHN, REQ_ACTIVE) {
   reissueRequest;
   popRspInQueue;
@@ -364,6 +375,17 @@ transition(WR_ACTIVE_DBID, RetryAckFromHN, WR_RETRY_WAIT) {
   popRspInQueue;
 }
 
+transition(WR_ACTIVE_DBID, EarlyPCrdGrantFromHN, WR_ACTIVE_DBID) {
+  recordPCrdGrant;
+  popRspInQueue;
+}
+
+transition(WR_ACTIVE_DBID, RetryAckWithGrantFromHN, WR_ACTIVE_DBID) {
+  recordPCrdType;
+  reissueRequest;
+  popRspInQueue;
+}
+
 transition(WR_RETRY_WAIT, PCrdGrantFromHN, WR_ACTIVE_DBID) {
   reissueRequest;
   popRspInQueue;
@@ -406,6 +428,17 @@ transition(EVWR_WAIT_DBID, RspIn_Comp_In, I) {
 // EVWR_WAIT_DBID: inbound evict/clean write retry
 transition(EVWR_WAIT_DBID, RetryAckFromHN, EVWR_RETRY_WAIT) {
   recordPCrdType;
+  popRspInQueue;
+}
+
+transition(EVWR_WAIT_DBID, EarlyPCrdGrantFromHN, EVWR_WAIT_DBID) {
+  recordPCrdGrant;
+  popRspInQueue;
+}
+
+transition(EVWR_WAIT_DBID, RetryAckWithGrantFromHN, EVWR_WAIT_DBID) {
+  recordPCrdType;
+  reissueRequest;
   popRspInQueue;
 }
 
@@ -543,6 +576,17 @@ transition(DL_ACTIVE, RetryAckFromHN, DL_RETRY_WAIT) {
   popRspInQueue;
 }
 
+transition(DL_ACTIVE, EarlyPCrdGrantFromHN, DL_ACTIVE) {
+  recordPCrdGrant;
+  popRspInQueue;
+}
+
+transition(DL_ACTIVE, RetryAckWithGrantFromHN, DL_ACTIVE) {
+  recordPCrdType;
+  reissueRequest;
+  popRspInQueue;
+}
+
 transition(DL_RETRY_WAIT, PCrdGrantFromHN, DL_ACTIVE) {
   reissueRequest;
   popRspInQueue;
@@ -587,6 +631,17 @@ transition(EV_ACTIVE, RspIn_Comp_In, I) {
 
 transition(EV_ACTIVE, RetryAckFromHN, EV_RETRY_WAIT) {
   recordPCrdType;
+  popRspInQueue;
+}
+
+transition(EV_ACTIVE, EarlyPCrdGrantFromHN, EV_ACTIVE) {
+  recordPCrdGrant;
+  popRspInQueue;
+}
+
+transition(EV_ACTIVE, RetryAckWithGrantFromHN, EV_ACTIVE) {
+  recordPCrdType;
+  reissueRequest;
   popRspInQueue;
 }
 
@@ -678,6 +733,17 @@ transition(ATOMIC_ACTIVE, DatIn_WrData_Local) {
 
 transition(ATOMIC_ACTIVE, RetryAckFromHN, ATOMIC_RETRY_WAIT) {
   recordPCrdType;
+  popRspInQueue;
+}
+
+transition(ATOMIC_ACTIVE, EarlyPCrdGrantFromHN, ATOMIC_ACTIVE) {
+  recordPCrdGrant;
+  popRspInQueue;
+}
+
+transition(ATOMIC_ACTIVE, RetryAckWithGrantFromHN, ATOMIC_ACTIVE) {
+  recordPCrdType;
+  reissueRequest;
   popRspInQueue;
 }
 
@@ -897,6 +963,19 @@ transition(WR_PUSH_FWD_WAIT_DBID, RetryAckFromHN, WR_PUSH_RETRY_WAIT) {
   popRspInQueue;
 }
 
+transition(WR_PUSH_FWD_WAIT_DBID, EarlyPCrdGrantFromHN,
+           WR_PUSH_FWD_WAIT_DBID) {
+  recordPCrdGrant;
+  popRspInQueue;
+}
+
+transition(WR_PUSH_FWD_WAIT_DBID, RetryAckWithGrantFromHN,
+           WR_PUSH_FWD_WAIT_DBID) {
+  recordPCrdType;
+  reissueRequest;
+  popRspInQueue;
+}
+
 transition(WR_PUSH_RETRY_WAIT, PCrdGrantFromHN, WR_PUSH_FWD_WAIT_DBID) {
   reissueRequest;
   popRspInQueue;
@@ -976,4 +1055,19 @@ transition({REQ_ACTIVE, ACTIVE_WAIT_DAT, ACTIVE_WAIT_COMP,
             OutReq_WritePull, OutReq_EvictWritePull,
             OutReq_AtomicStore, OutReq_AtomicLoad}) {
   stallRequestQueue;
+}
+
+transition({REQ_ACTIVE, ACTIVE_WAIT_DAT, ACTIVE_WAIT_COMP,
+            WR_ACTIVE_DBID, EVWR_WAIT_DBID, EVWR_WAIT_DATA,
+            EVWR_FWD_WAIT_DATA, WR_WAIT_COMP, WR_FWD_WAIT_DATA,
+            COMPACK_ACTIVE, DL_ACTIVE, EV_ACTIVE, ATOMIC_ACTIVE,
+            REQ_RETRY_WAIT, WR_RETRY_WAIT, EVWR_RETRY_WAIT,
+            DL_RETRY_WAIT, EV_RETRY_WAIT,
+            ATOMIC_RETRY_WAIT, WR_PUSH_RETRY_WAIT,
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
+            WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
+           {InReq_Read, InReq_Write, InReq_EvictWrite,
+            InReq_Dataless, InReq_Evict, InReq_Atomic}) {
+  stallC2CRxReqQueue;
 }

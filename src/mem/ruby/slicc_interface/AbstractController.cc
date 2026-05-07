@@ -91,6 +91,7 @@ AbstractController::init()
 
     downstreamDestinations.setRubySystem(m_ruby_system);
     upstreamDestinations.setRubySystem(m_ruby_system);
+    peerUpstreamDestinations.setRubySystem(m_ruby_system);
 
     // Initialize the addr->downstream machine mappings. Multiple machines
     // in downstream_destinations can have the same address range if they have
@@ -120,6 +121,11 @@ AbstractController::init()
     }
     for (auto node_id : params().upstream_cache_destinations) {
         upstreamDestinations.add(MachineID(MachineType_Cache, node_id));
+    }
+
+    peerUpstreamDestinations.resize();
+    for (auto node_id : params().peer_upstream_cache_destinations) {
+        peerUpstreamDestinations.add(MachineID(MachineType_Cache, node_id));
     }
 }
 

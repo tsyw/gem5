@@ -184,13 +184,54 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
   if (rspInPort.isReady(clockEdge())) {
     printResources();
     peek(rspInPort, CHIResponseMsg) {
-      DPRINTF(RubySlicc, "rspInPort: addr=%#x type=%s responder=%s\n",
-              in_msg.addr, in_msg.type, in_msg.responder);
+      DPRINTF(RubySlicc,
+              "rspInPort: addr=%#x type=%s responder=%s txnId=%#x\n",
+              in_msg.addr, in_msg.type, in_msg.responder, in_msg.txnId);
       // RetryAck and PCrdGrant are non-directional (always from local HN)
       if ((in_msg.type == CHIResponseType:RetryAck) ||
           (in_msg.type == CHIResponseType:PCrdGrant)) {
         TBE tbe := TBEs[in_msg.addr];
-        trigger(respToEvent(in_msg.type), in_msg.addr, tbe);
+        if (is_valid(tbe) && (tbe.isOutbound == false) &&
+            (in_msg.txnId == tbe.txnID)) {
+          if (in_msg.type == CHIResponseType:RetryAck) {
+            if (tbe.retryPending == false && tbe.retryGrantPending) {
+              trigger(Event:RetryAckWithGrantFromHN, in_msg.addr, tbe);
+            } else if (tbe.retryPending == false) {
+              trigger(Event:RetryAckFromHN, in_msg.addr, tbe);
+            } else {
+              DPRINTF(RubySlicc,
+                      "rspInPort: absorb duplicate retry/grant addr=%#x type=%s txnId=%#x state=%s tbeTxnID=%#x outbound=%d retryPending=%d retryGrantPending=%d\n",
+                      in_msg.addr, in_msg.type, in_msg.txnId,
+                      tbe.state, tbe.txnID, tbe.isOutbound,
+                      tbe.retryPending, tbe.retryGrantPending);
+              rspInPort.dequeue(clockEdge());
+            }
+          } else if (tbe.retryPending) {
+            trigger(Event:PCrdGrantFromHN, in_msg.addr, tbe);
+          } else if (tbe.retryGrantPending == false) {
+            trigger(Event:EarlyPCrdGrantFromHN, in_msg.addr, tbe);
+          } else {
+            DPRINTF(RubySlicc,
+                    "rspInPort: absorb duplicate retry/grant addr=%#x type=%s txnId=%#x state=%s tbeTxnID=%#x outbound=%d retryPending=%d retryGrantPending=%d\n",
+                    in_msg.addr, in_msg.type, in_msg.txnId,
+                    tbe.state, tbe.txnID, tbe.isOutbound,
+                    tbe.retryPending, tbe.retryGrantPending);
+            rspInPort.dequeue(clockEdge());
+          }
+        } else {
+          if (is_valid(tbe)) {
+            DPRINTF(RubySlicc,
+                    "rspInPort: absorb stale retry/grant addr=%#x type=%s txnId=%#x state=%s tbeTxnID=%#x outbound=%d retryPending=%d retryGrantPending=%d\n",
+                    in_msg.addr, in_msg.type, in_msg.txnId,
+                    tbe.state, tbe.txnID, tbe.isOutbound,
+                    tbe.retryPending, tbe.retryGrantPending);
+          } else {
+            DPRINTF(RubySlicc,
+                    "rspInPort: absorb stale retry/grant addr=%#x type=%s txnId=%#x without active TBE\n",
+                    in_msg.addr, in_msg.type, in_msg.txnId);
+          }
+          rspInPort.dequeue(clockEdge());
+        }
       } else if (isSnpRespType(in_msg.type)) {
         // Snoop responses: check snpTBEs first
         TBE tbe := snpTBEs[in_msg.addr];
