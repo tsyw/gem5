@@ -35,7 +35,7 @@
 #include "base/statistics.hh"
 #include "mem/ruby/common/Consumer.hh"
 #include "mem/ruby/network/MessageBuffer.hh"
-#include "mem/ruby/protocol/chi/c2c/C2CContainer.hh"
+#include "mem/ruby/protocol/chi/c2c/C2CPacketizer.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
 #include "mem/ruby/structures/C2CCreditManager.hh"
 #include "params/C2CPacketizerBridge.hh"
@@ -89,22 +89,34 @@ class C2CPacketizerBridge : public ClockedObject, public Consumer
     MessageBuffer *outBuf[NUM_CHANNELS];
 
     // Per-channel queues of messages awaiting packing
-    std::array<std::deque<MsgPtr>, NUM_CHANNELS> msgQueues;
+    struct BufferedMsg
+    {
+        MsgPtr msg;
+        chi_c2c::QueuedMsg queued;
+        unsigned wireBytes;
+    };
+    std::array<std::deque<BufferedMsg>, NUM_CHANNELS> msgQueues;
+
+    struct PendingCredits
+    {
+        Tick readyTick;
+        uint8_t req;
+        uint8_t rsp;
+        uint8_t dat;
+        uint8_t snp;
+    };
+    std::deque<PendingCredits> pendingCredits;
 
     const Cycles containerLatency;
     const unsigned txqSize;    // 0 = unlimited
-    unsigned bufferedGranules; // total granules currently in msgQueues
+    unsigned bufferedBytes;    // total packed bytes currently in msgQueues
     RubySystem *const rubySystem;
 
     C2CCreditManager *txCreditMgr;
     C2CCreditManager *rxCreditMgr;
 
-    // Container priority: RSP > DAT > SNP > REQ > MISC
-    static constexpr int priorityOrder[NUM_CHANNELS] = {CH_RSP, CH_DAT, CH_SNP,
-                                                        CH_REQ, CH_MISC};
-
-    // Granule cost per channel (IHI0098A Table 4.4 upper bound)
-    static unsigned granulesForChannel(int ch);
+    BufferedMsg buildBufferedMsg(const MsgPtr &msg, int ch) const;
+    void applyReadyCredits(Tick curTk);
     void packAndDeliver();
 
     // Per-channel message counters (exported as gem5 stats)

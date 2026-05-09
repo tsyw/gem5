@@ -152,6 +152,28 @@ _SLC_SIZE = "1MiB"
 _SLC_ASSOC = 16
 # SVE vector length: 2×256-bit = 4 quadwords of 128 bits
 _SVE_VL = 4
+_HBM2_PEAK_GBPS_PER_CTRL = 32.0
+_HBM2_SCALABLE_TIMING_NS = {
+    "tCK": 1.0,
+    "tRP": 14.0,
+    "tCCD_L": 3.0,
+    "tRCD": 12.0,
+    "tRCD_WR": 6.0,
+    "tCL": 18.0,
+    "tCWL": 7.0,
+    "tRAS": 28.0,
+    "tBURST": 2.0,
+    "tWR": 14.0,
+    "tRTP": 5.0,
+    "tWTR": 4.0,
+    "tWTR_L": 9.0,
+    "tRTW": 18.0,
+    "tAAD": 1.0,
+    "tRRD": 4.0,
+    "tRRD_L": 6.0,
+    "tXAW": 16.0,
+    "tXP": 8.0,
+}
 
 
 # ------------------------------------------------------------------
@@ -200,7 +222,24 @@ def _configure_sve(cpu):
 # (two HBM_2000_4H_1x64 interfaces).  The controller's port is bound
 # to the SNF's memory_out_port after topology construction.
 # ------------------------------------------------------------------
-def _make_hbm2_ctrl(addr_range):
+def _scale_hbm2_peak(interface, peak_bw_gbps):
+    if peak_bw_gbps <= 0.0:
+        raise ValueError("HBM peak bandwidth must be positive")
+
+    scale = _HBM2_PEAK_GBPS_PER_CTRL / peak_bw_gbps
+    if math.isclose(scale, 1.0):
+        return
+
+    for name, base_ns in _HBM2_SCALABLE_TIMING_NS.items():
+        setattr(interface, name, f"{base_ns * scale:g}ns")
+
+    burst = interface.tBURST
+    interface.tBURST_MIN = burst
+    interface.tBURST_MAX = burst
+    interface.tCCD_L_WR = interface.tCCD_L
+
+
+def _make_hbm2_ctrl(addr_range, peak_bw_gbps=_HBM2_PEAK_GBPS_PER_CTRL):
     """Return an HBMCtrl for one chip, covering addr_range."""
     masks = [1 << 6]
     ctrl = HBMCtrl()
@@ -220,6 +259,8 @@ def _make_hbm2_ctrl(addr_range):
             intlvMatch=1,
         )
     )
+    _scale_hbm2_peak(ctrl.dram, peak_bw_gbps)
+    _scale_hbm2_peak(ctrl.dram_2, peak_bw_gbps)
     return ctrl
 
 

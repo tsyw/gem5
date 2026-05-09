@@ -345,6 +345,13 @@ parser.add_argument(
     help="Total simulated memory size (default 8GiB)",
 )
 parser.add_argument(
+    "--hbm-peak-gbps",
+    type=float,
+    default=32.0,
+    metavar="GBPS",
+    help="Peak memory bandwidth per HBM controller in GB/s (default 32)",
+)
+parser.add_argument(
     "--bin",
     required=True,
     metavar="PATH",
@@ -434,6 +441,8 @@ system.clk_domain = SrcClockDomain(
 )
 system.mem_mode = "timing"
 system.cache_line_size = args.cacheline_size
+if num_cores > 1:
+    system.multi_thread = True
 
 # ------------------------------------------------------------------
 # CPUs
@@ -584,14 +593,13 @@ assert (
 # Wire sequencers to CPUs
 # ------------------------------------------------------------------
 for cpu, seq in zip(cpus, cpu_seqs):
-    cpu.icache_port = seq.in_ports
-    cpu.dcache_port = seq.in_ports
+    seq.connectCpuPorts(cpu)
 
 # ------------------------------------------------------------------
 # HBM2 memory controllers
 # ------------------------------------------------------------------
 for i, (snf_cntrl, mem_range) in enumerate(zip(snf_cntrls, snf_mem_ranges)):
-    ctrl = _make_hbm2_ctrl(mem_range)
+    ctrl = _make_hbm2_ctrl(mem_range, peak_bw_gbps=args.hbm_peak_gbps)
     ctrl.port = snf_cntrl.memory_out_port
     snf_cntrl.addr_ranges = [mem_range]
     setattr(system, f"mem_ctrl{i}", ctrl)

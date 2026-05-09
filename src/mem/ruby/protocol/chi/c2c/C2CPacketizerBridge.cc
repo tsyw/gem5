@@ -29,6 +29,14 @@
 #include "mem/ruby/protocol/chi/c2c/C2CPacketizerBridge.hh"
 
 #include "debug/RubyCHIC2CPacketizer.hh"
+#include "mem/ruby/protocol/CHI/CHIDataMsg.hh"
+#include "mem/ruby/protocol/CHI/CHIDataType.hh"
+#include "mem/ruby/protocol/CHI/CHIRequestMsg.hh"
+#include "mem/ruby/protocol/CHI/CHIRequestType.hh"
+#include "mem/ruby/protocol/CHI/CHIResponseMsg.hh"
+#include "mem/ruby/protocol/CHI/CHI_C2C_MiscMsg.hh"
+#include "mem/ruby/protocol/CHI/CHI_C2C_MiscMsgType.hh"
+#include "mem/ruby/protocol/chi/c2c/C2CPacketizer.hh"
 #include "mem/ruby/system/RubySystem.hh"
 
 namespace gem5
@@ -36,6 +44,198 @@ namespace gem5
 
 namespace ruby
 {
+
+namespace
+{
+
+using CHI::CHI_C2C_MiscMsg;
+using CHI::CHIDataMsg;
+using CHI::CHIRequestMsg;
+using CHI::CHIResponseMsg;
+using chi_c2c::Channel;
+using chi_c2c::ContainerPacker;
+using chi_c2c::GRANULE_SIZE;
+using chi_c2c::MsgType;
+using chi_c2c::QueuedMsg;
+using chi_c2c::wireBytesForMsgType;
+
+enum BridgeChannelIdx
+{
+    BridgeRsp = 0,
+    BridgeDat = 1,
+    BridgeSnp = 2,
+    BridgeReq = 3,
+    BridgeMisc = 4,
+};
+
+Channel
+toPacketizerChannel(int ch)
+{
+    switch (ch) {
+        case BridgeRsp:
+            return Channel::RSP;
+        case BridgeDat:
+            return Channel::DAT;
+        case BridgeSnp:
+            return Channel::SNP;
+        case BridgeReq:
+            return Channel::REQ;
+        case BridgeMisc:
+            return Channel::MISC;
+        default:
+            panic("C2CPacketizerBridge: invalid channel %d", ch);
+    }
+}
+
+MsgType
+requestMsgType(const CHIRequestMsg &msg, int ch)
+{
+    const auto type = msg.gettype();
+
+    switch (ch) {
+        case BridgeSnp:
+            return MsgType::Snoop;
+        case BridgeReq:
+            switch (type) {
+                case CHI::CHIRequestType_DvmTlbi_Initiate:
+                case CHI::CHIRequestType_DvmSync_Initiate:
+                case CHI::CHIRequestType_DvmSync_ExternCompleted:
+                case CHI::CHIRequestType_SnpDvmOpSync_P1:
+                case CHI::CHIRequestType_SnpDvmOpSync_P2:
+                case CHI::CHIRequestType_SnpDvmOpNonSync_P1:
+                case CHI::CHIRequestType_SnpDvmOpNonSync_P2:
+                case CHI::CHIRequestType_DvmOpNonSync:
+                case CHI::CHIRequestType_DvmOpSync:
+                    return MsgType::ReqL;
+                default:
+                    return MsgType::ReqS;
+            }
+        default:
+            panic("C2CPacketizerBridge: invalid request channel %d", ch);
+    }
+}
+
+MsgType
+responseMsgType(const CHIResponseMsg &msg)
+{
+    switch (msg.gettype()) {
+        case CHI::CHIResponseType_DBIDResp:
+        case CHI::CHIResponseType_CompDBIDResp:
+        case CHI::CHIResponseType_RespSepData:
+            return MsgType::Resp2;
+        default:
+            return MsgType::Resp;
+    }
+}
+
+MsgType
+dataMsgType(const CHIDataMsg &msg)
+{
+    const auto type = msg.gettype();
+
+    switch (type) {
+        case CHI::CHIDataType_WrReqDataS:
+            return MsgType::WrReqS;
+        case CHI::CHIDataType_WrReqDataL:
+            return MsgType::WrReqL;
+        default:
+            break;
+    }
+
+    const auto validBytes = msg.getbitMask().count();
+    panic_if(validBytes == 0,
+             "C2CPacketizerBridge: data message without valid bytes");
+    panic_if(validBytes > 64,
+             "C2CPacketizerBridge: data message too large: %zu bytes",
+             validBytes);
+
+    return validBytes <= 32 ? MsgType::DataS : MsgType::DataL;
+}
+
+MsgType
+miscMsgType(const CHI_C2C_MiscMsg &msg)
+{
+    switch (msg.gettype()) {
+        case CHI::CHI_C2C_MiscMsgType_CreditGrant:
+        case CHI::CHI_C2C_MiscMsgType_CreditReturn:
+            return MsgType::MiscU;
+        default:
+            return MsgType::MiscC;
+    }
+}
+
+QueuedMsg
+buildQueuedMsgPayload(const CHIDataMsg &msg, MsgType type)
+{
+    QueuedMsg queued;
+    queued.channel = Channel::DAT;
+    queued.type = type;
+
+    if (type == MsgType::DataS || type == MsgType::WrReqS) {
+        const bool upperHalf = (msg.getaddr() & 0x20) != 0;
+        const unsigned base = upperHalf ? 32 : 0;
+
+        queued.shortDataUpper = upperHalf;
+        queued.chunkValid = upperHalf ? 0x2 : 0x1;
+        queued.data.resize(32, 0);
+
+        for (unsigned idx = 0; idx < 32; ++idx) {
+            const unsigned byte = base + idx;
+            panic_if(
+                msg.getbitMask().test(byte) &&
+                    ((upperHalf && byte < 32) || (!upperHalf && byte >= 32)),
+                "C2CPacketizerBridge: short data bitMask crosses addr[5] "
+                "half");
+            if (msg.getbitMask().test(byte)) {
+                queued.data[idx] = msg.getdataBlk().getByte(byte);
+            }
+        }
+        return queued;
+    }
+
+    queued.chunkValid = 0x3;
+    queued.data.resize(64, 0);
+    for (unsigned byte = 0; byte < 64; ++byte) {
+        if (msg.getbitMask().test(byte)) {
+            queued.data[byte] = msg.getdataBlk().getByte(byte);
+        }
+    }
+    return queued;
+}
+
+int
+toBridgeChannelIdx(Channel ch)
+{
+    switch (ch) {
+        case Channel::RSP:
+            return BridgeRsp;
+        case Channel::DAT:
+            return BridgeDat;
+        case Channel::SNP:
+            return BridgeSnp;
+        case Channel::REQ:
+            return BridgeReq;
+        case Channel::MISC:
+            return BridgeMisc;
+        case Channel::NUM_CHANNELS:
+            break;
+    }
+
+    panic("C2CPacketizerBridge: invalid packetizer channel");
+}
+
+unsigned
+availableSlotBudget(MessageBuffer *buffer, Tick curTk, unsigned limit)
+{
+    unsigned budget = 0;
+    while (budget < limit && buffer->areNSlotsAvailable(budget + 1, curTk)) {
+        budget++;
+    }
+
+    return budget;
+}
+
+} // namespace
 
 C2CPacketizerBridge::BridgeStats::BridgeStats(statistics::Group *parent)
     : statistics::Group(parent),
@@ -56,7 +256,7 @@ C2CPacketizerBridge::C2CPacketizerBridge(const Params &p)
       Consumer(this),
       containerLatency(Cycles(p.container_latency)),
       txqSize(p.txq_size),
-      bufferedGranules(0),
+      bufferedBytes(0),
       rubySystem(p.ruby_system),
       txCreditMgr(nullptr),
       rxCreditMgr(nullptr),
@@ -84,6 +284,66 @@ C2CPacketizerBridge::init()
     }
 }
 
+C2CPacketizerBridge::BufferedMsg
+C2CPacketizerBridge::buildBufferedMsg(const MsgPtr &msg, int ch) const
+{
+    QueuedMsg queued;
+
+    switch (ch) {
+        case CH_REQ:
+        case CH_SNP: {
+            auto *req = dynamic_cast<const CHIRequestMsg *>(msg.get());
+            panic_if(!req,
+                     "C2CPacketizerBridge: expected CHIRequestMsg on ch=%d",
+                     ch);
+            queued.channel = toPacketizerChannel(ch);
+            queued.type = requestMsgType(*req, ch);
+            break;
+        }
+        case CH_RSP: {
+            auto *rsp = dynamic_cast<const CHIResponseMsg *>(msg.get());
+            panic_if(!rsp,
+                     "C2CPacketizerBridge: expected CHIResponseMsg on ch=%d",
+                     ch);
+            queued.channel = Channel::RSP;
+            queued.type = responseMsgType(*rsp);
+            break;
+        }
+        case CH_DAT: {
+            auto *dat = dynamic_cast<const CHIDataMsg *>(msg.get());
+            panic_if(!dat, "C2CPacketizerBridge: expected CHIDataMsg on ch=%d",
+                     ch);
+            queued = buildQueuedMsgPayload(*dat, dataMsgType(*dat));
+            break;
+        }
+        case CH_MISC: {
+            auto *misc = dynamic_cast<const CHI_C2C_MiscMsg *>(msg.get());
+            panic_if(!misc,
+                     "C2CPacketizerBridge: expected CHI_C2C_MiscMsg on ch=%d",
+                     ch);
+            queued.channel = Channel::MISC;
+            queued.type = miscMsgType(*misc);
+            break;
+        }
+        default:
+            panic("C2CPacketizerBridge: invalid channel %d", ch);
+    }
+
+    return BufferedMsg{msg, queued, wireBytesForMsgType(queued.type)};
+}
+
+void
+C2CPacketizerBridge::applyReadyCredits(Tick curTk)
+{
+    while (!pendingCredits.empty() &&
+           pendingCredits.front().readyTick <= curTk) {
+        const auto pending = pendingCredits.front();
+        pendingCredits.pop_front();
+        rxCreditMgr->applyReturnCredits(pending.req, pending.rsp, pending.dat,
+                                        pending.snp);
+    }
+}
+
 void
 C2CPacketizerBridge::startup()
 {
@@ -106,43 +366,32 @@ C2CPacketizerBridge::print(std::ostream &out) const
     out << "[C2CPacketizerBridge " << name() << "]";
 }
 
-unsigned
-C2CPacketizerBridge::granulesForChannel(int ch)
-{
-    // Upper-bound granule cost per channel (IHI0098A Table 4.4)
-    using namespace chi_c2c;
-    switch (ch) {
-        case CH_RSP:
-            return granulesForMsgType(MsgType::Resp);
-        case CH_SNP:
-            return granulesForMsgType(MsgType::Snoop);
-        case CH_MISC:
-            return granulesForMsgType(MsgType::MiscU);
-        case CH_REQ:
-            return granulesForMsgType(MsgType::ReqS);
-        case CH_DAT:
-            return granulesForMsgType(MsgType::DataL);
-        default:
-            panic("C2CPacketizerBridge: invalid channel %d", ch);
-            return 0;
-    }
-}
-
 void
 C2CPacketizerBridge::wakeup()
 {
     Tick curTk = curTick();
 
+    applyReadyCredits(curTk);
+
     for (int i = 0; i < NUM_CHANNELS; i++) {
         while (inBuf[i]->isReady(curTk)) {
-            // Enforce TXQ limit: stop draining when buffer is full
-            if (txqSize > 0 && bufferedGranules >= txqSize) {
-                scheduleEvent(Cycles(1));
-                break;
-            }
             MsgPtr msg = inBuf[i]->peekMsgPtr();
-            msgQueues[i].push_back(msg);
-            bufferedGranules += granulesForChannel(i);
+            BufferedMsg buffered = buildBufferedMsg(msg, i);
+
+            if (txqSize > 0) {
+                const unsigned txqBytes = txqSize * GRANULE_SIZE;
+                panic_if(buffered.wireBytes > txqBytes,
+                         "%s: txq_size=%u cannot hold single %u-byte "
+                         "message on channel %d",
+                         name(), txqSize, buffered.wireBytes, i);
+                if (bufferedBytes + buffered.wireBytes > txqBytes) {
+                    scheduleEvent(Cycles(1));
+                    break;
+                }
+            }
+
+            bufferedBytes += buffered.wireBytes;
+            msgQueues[i].push_back(std::move(buffered));
             inBuf[i]->dequeue(curTk);
         }
     }
@@ -155,70 +404,91 @@ C2CPacketizerBridge::wakeup()
             return;
         }
     }
+
+    if (!pendingCredits.empty()) {
+        scheduleEventAbsolute(pendingCredits.front().readyTick);
+    }
 }
 
 void
 C2CPacketizerBridge::packAndDeliver()
 {
-    unsigned remaining = chi_c2c::NUM_MSG_GRANULES;
     Tick curTk = curTick();
     Tick delta = cyclesToTicks(containerLatency);
+    ContainerPacker packer;
 
-    for (int pi = 0; pi < NUM_CHANNELS; pi++) {
-        int ch = priorityOrder[pi];
-        unsigned granPerMsg = granulesForChannel(ch);
+    for (int i = 0; i < NUM_CHANNELS; i++) {
+        unsigned slotBudget =
+            availableSlotBudget(outBuf[i], curTk, msgQueues[i].size());
+        for (unsigned j = 0; j < slotBudget; j++) {
+            const auto &buffered = msgQueues[i][j];
+            packer.addMessage(buffered.queued);
+        }
+    }
 
-        while (!msgQueues[ch].empty() && granPerMsg <= remaining) {
-            if (!outBuf[ch]->areNSlotsAvailable(1, curTk)) {
+    uint8_t crReq = 0, crRsp = 0, crDat = 0, crSnp = 0;
+    txCreditMgr->drainReturnPending(crReq, crRsp, crDat, crSnp);
+    packer.setCreditReturns(crReq, crRsp, crDat, crSnp);
+
+    auto packed = packer.packContainerDetailed();
+    if (!packed.has_value()) {
+        return;
+    }
+
+    for (const auto &queued : packed->packedMessages) {
+        int ch = toBridgeChannelIdx(queued.channel);
+
+        panic_if(msgQueues[ch].empty(),
+                 "%s: packer selected empty bridge queue for ch=%d", name(),
+                 ch);
+
+        const auto &buffered = msgQueues[ch].front();
+        panic_if(buffered.queued.type != queued.type,
+                 "%s: queued MsgType mismatch on ch=%d (expected %d, got %d)",
+                 name(), ch, static_cast<int>(buffered.queued.type),
+                 static_cast<int>(queued.type));
+
+        MsgPtr msg = buffered.msg;
+        unsigned wireBytes = buffered.wireBytes;
+        msgQueues[ch].pop_front();
+        panic_if(bufferedBytes < wireBytes,
+                 "%s: bufferedBytes underflow (%u < %u)", name(),
+                 bufferedBytes, wireBytes);
+        bufferedBytes -= wireBytes;
+
+        outBuf[ch]->enqueue(msg, curTk, delta, rubySystem->getRandomization(),
+                            rubySystem->getWarmupEnabled());
+
+        switch (ch) {
+            case CH_REQ:
+                bridgeStats.req_c2c++;
                 break;
-            }
-
-            MsgPtr msg = msgQueues[ch].front();
-            msgQueues[ch].pop_front();
-            bufferedGranules -= granPerMsg;
-
-            outBuf[ch]->enqueue(msg, curTk, delta,
-                                rubySystem->getRandomization(),
-                                rubySystem->getWarmupEnabled());
-
-            remaining -= granPerMsg;
-
-            // Update per-channel message counters
-            switch (ch) {
-                case CH_REQ:
-                    bridgeStats.req_c2c++;
-                    break;
-                case CH_SNP:
-                    bridgeStats.snp_c2c++;
-                    break;
-                case CH_RSP:
-                    bridgeStats.rsp_c2c++;
-                    break;
-                case CH_DAT:
-                    bridgeStats.dat_c2c++;
-                    break;
-                default:
-                    break;
-            }
-
-            DPRINTF(RubyCHIC2CPacketizer,
-                    "Packed ch=%d, %u granules used, %u remain\n", ch,
-                    granPerMsg, remaining);
+            case CH_SNP:
+                bridgeStats.snp_c2c++;
+                break;
+            case CH_RSP:
+                bridgeStats.rsp_c2c++;
+                break;
+            case CH_DAT:
+                bridgeStats.dat_c2c++;
+                break;
+            default:
+                break;
         }
     }
 
-    // Piggyback credit returns only when a container was actually sent
-    if (remaining < chi_c2c::NUM_MSG_GRANULES) {
-        bridgeStats.containers_sent++;
-        uint8_t crReq = 0, crRsp = 0, crDat = 0, crSnp = 0;
-        txCreditMgr->drainReturnPending(crReq, crRsp, crDat, crSnp);
-        if (crReq || crRsp || crDat || crSnp) {
-            rxCreditMgr->applyReturnCredits(crReq, crRsp, crDat, crSnp);
-            DPRINTF(RubyCHIC2CPacketizer,
-                    "Credit return: req=%u rsp=%u dat=%u snp=%u\n", crReq,
-                    crRsp, crDat, crSnp);
-        }
+    bridgeStats.containers_sent++;
+    if (crReq || crRsp || crDat || crSnp) {
+        pendingCredits.push_back({curTk + delta, crReq, crRsp, crDat, crSnp});
+        scheduleEventAbsolute(curTk + delta);
     }
+
+    DPRINTF(RubyCHIC2CPacketizer,
+            "Sent container msgStart=0x%x used=%u msgs=%zu credits"
+            "[req=%u rsp=%u dat=%u snp=%u]\n",
+            packed->container.getMsgStartRaw(),
+            packed->container.granulesUsed(), packed->packedMessages.size(),
+            crReq, crRsp, crDat, crSnp);
 }
 
 } // namespace ruby

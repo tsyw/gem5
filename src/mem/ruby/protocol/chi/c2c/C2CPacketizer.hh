@@ -29,6 +29,7 @@
 #ifndef __MEM_RUBY_PROTOCOL_CHI_C2C_C2CPACKETIZER_HH__
 #define __MEM_RUBY_PROTOCOL_CHI_C2C_C2CPACKETIZER_HH__
 
+#include <array>
 #include <deque>
 #include <optional>
 #include <vector>
@@ -61,6 +62,15 @@ enum class ContainerError : uint8_t
 {
     NONE = 0,
     MSGSTART_OUT_OF_RANGE,
+    INVALID_MSGTYPE,
+    MESSAGE_OVERRUN,
+    UNEXPECTED_MSGSTART_IN_BODY,
+    NONZERO_GRANULE_WITHOUT_START,
+    INVALID_GROUP_OCCUPANCY,
+    INVALID_RESPONSE_PACKING,
+    TOO_MANY_RESPONSES_IN_GROUP,
+    MULTIPLE_MISCU_IN_GROUP,
+    INVALID_CHUNK_VALID,
 };
 
 struct ValidationResult
@@ -75,6 +85,14 @@ struct QueuedMsg
     Channel channel;
     MsgType type;
     std::vector<uint8_t> data;
+    uint8_t chunkValid = 0;
+    bool shortDataUpper = false;
+};
+
+struct PackedContainer
+{
+    C2CContainer container;
+    std::vector<QueuedMsg> packedMessages;
 };
 
 // Packs messages from multiple channels into Format X containers.
@@ -96,6 +114,9 @@ class ContainerPacker
     // Produce a container from queued messages.
     // Returns nullopt if no messages are queued.
     std::optional<C2CContainer> packContainer();
+
+    // Produce a container and the ordered messages that were packed into it.
+    std::optional<PackedContainer> packContainerDetailed();
 
     // Check if any messages are queued.
     bool hasMessages() const;
@@ -132,7 +153,7 @@ class ContainerUnpacker
     ValidationResult validate() const;
 
     // Extract all messages from the container.
-    // Returns a vector of PackedMsg (raw granule data per message).
+    // Returns parsed MsgType plus raw granule data for each message.
     std::vector<PackedMsg> extractAll() const;
 
   private:

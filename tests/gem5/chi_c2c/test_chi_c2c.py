@@ -37,9 +37,23 @@ and deferred credit returns.  Tests pass if gem5 exits cleanly
 (no panic, no assert, exit code 0).
 """
 
+import re
+
 from testlib import *
 
 config = joinpath(absdirpath(__file__), "configs", "chi_c2c_run.py")
+ruby_mem_config = joinpath(
+    absdirpath(__file__), "configs", "chi_c2c_ruby_mem_test.py"
+)
+
+
+def limit_reached_verifier(tick):
+    return verifier.MatchRegex(
+        re.compile(
+            f"Exiting @ tick {tick} because simulate\\(\\) limit reached"
+        )
+    )
+
 
 c2c_tests = [
     ("chi-c2c-series-getx", "SeriesGetx", 20),
@@ -64,6 +78,100 @@ for name, test_type, requests in c2c_tests:
             str(requests),
             "--topology=Crossbar",
         ],
+        valid_isas=(constants.all_compiled_tag,),
+        valid_hosts=constants.supported_hosts,
+        protocol="CHI",
+        length=constants.long_tag,
+    )
+
+
+ruby_mem_long_tests = [
+    (
+        "chi-c2c-ruby-mem-r2-long",
+        [
+            "--topology",
+            "R2",
+            "--num-cpus",
+            "4",
+            "--progress",
+            "500000",
+            "--abs-max-tick",
+            "10000000000",
+        ],
+    ),
+    (
+        "chi-c2c-ruby-mem-r3-long",
+        [
+            "--topology",
+            "R3",
+            "--num-cpus",
+            "4",
+            "--num-c2cgs",
+            "3",
+            "--progress",
+            "500000",
+            "--abs-max-tick",
+            "10000000000",
+        ],
+    ),
+]
+
+for name, config_args in ruby_mem_long_tests:
+    gem5_verify_config(
+        name=name,
+        fixtures=(),
+        verifiers=[limit_reached_verifier(10000000000)],
+        config=ruby_mem_config,
+        config_args=config_args,
+        valid_isas=(constants.all_compiled_tag,),
+        valid_hosts=constants.supported_hosts,
+        protocol="CHI",
+        length=constants.very_long_tag,
+    )
+
+
+atomic_forward_tests = [
+    (
+        "chi-c2c-ruby-mem-r2-atomic-forward",
+        [
+            "--topology",
+            "R2",
+            "--num-cpus",
+            "4",
+            "--atomic",
+            "100",
+            "--progress",
+            "50000",
+            "--abs-max-tick",
+            "1000000",
+        ],
+    ),
+    (
+        "chi-c2c-ruby-mem-r3-atomic-forward",
+        [
+            "--topology",
+            "R3",
+            "--num-cpus",
+            "4",
+            "--num-c2cgs",
+            "3",
+            "--atomic",
+            "100",
+            "--progress",
+            "50000",
+            "--abs-max-tick",
+            "1000000",
+        ],
+    ),
+]
+
+for name, config_args in atomic_forward_tests:
+    gem5_verify_config(
+        name=name,
+        fixtures=(),
+        verifiers=[limit_reached_verifier(1000000)],
+        config=ruby_mem_config,
+        config_args=config_args,
         valid_isas=(constants.all_compiled_tag,),
         valid_hosts=constants.supported_hosts,
         protocol="CHI",

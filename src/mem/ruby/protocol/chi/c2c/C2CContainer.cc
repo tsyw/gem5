@@ -28,6 +28,7 @@
 
 #include "mem/ruby/protocol/chi/c2c/C2CContainer.hh"
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 
@@ -40,18 +41,31 @@ namespace ruby
 namespace chi_c2c
 {
 
+namespace
+{
+
+constexpr std::array<unsigned, NUM_MSG_GRANULES> GranuleWireOffsets = {
+    2, 22, 42, 66, 86, 106, 130, 150, 170, 194, 214, 234,
+};
+
+constexpr std::array<unsigned, PROTHDR_WIRE_SIZE> ProtHdrWireOffsets = {
+    62, 63, 64, 65, 128, 129, 190, 191, 192, 193,
+};
+
+} // namespace
+
 unsigned
 granulesForMsgType(MsgType type)
 {
     switch (type) {
         case MsgType::Resp:
+        case MsgType::Resp2:
         case MsgType::Snoop:
         case MsgType::MiscU:
         case MsgType::MiscC:
             return 1;
         case MsgType::ReqS:
         case MsgType::ReqL:
-        case MsgType::Resp2:
             return 2;
         case MsgType::DataS:
         case MsgType::WrReqS:
@@ -65,10 +79,145 @@ granulesForMsgType(MsgType type)
     }
 }
 
+unsigned
+wireBytesForMsgType(MsgType type)
+{
+    if (isResponseMsgType(type)) {
+        return responseSlotUnitsForMsgType(type) * RESPONSE_SLOT_SIZE;
+    }
+
+    return granulesForMsgType(type) * GRANULE_SIZE;
+}
+
+unsigned
+responseSlotUnitsForMsgType(MsgType type)
+{
+    switch (type) {
+        case MsgType::Resp:
+            return 1;
+        case MsgType::Resp2:
+            return 2;
+        default:
+            return 0;
+    }
+}
+
+uint8_t
+wireCodeForMsgType(MsgType type)
+{
+    switch (type) {
+        case MsgType::Resp:
+            return 0x11;
+        case MsgType::Resp2:
+            return 0x12;
+        case MsgType::Snoop:
+            return 0x21;
+        case MsgType::MiscU:
+            return 0x31;
+        case MsgType::MiscC:
+            return 0x32;
+        case MsgType::ReqS:
+            return 0x41;
+        case MsgType::ReqL:
+            return 0x42;
+        case MsgType::DataS:
+            return 0x51;
+        case MsgType::WrReqS:
+            return 0x52;
+        case MsgType::DataL:
+            return 0x61;
+        case MsgType::WrReqL:
+            return 0x62;
+        default:
+            assert(false && "Unknown MsgType");
+            return 0;
+    }
+}
+
+std::optional<MsgType>
+decodeMsgType(uint8_t raw)
+{
+    switch (raw) {
+        case 0x11:
+            return MsgType::Resp;
+        case 0x12:
+            return MsgType::Resp2;
+        case 0x21:
+            return MsgType::Snoop;
+        case 0x31:
+            return MsgType::MiscU;
+        case 0x32:
+            return MsgType::MiscC;
+        case 0x41:
+            return MsgType::ReqS;
+        case 0x42:
+            return MsgType::ReqL;
+        case 0x51:
+            return MsgType::DataS;
+        case 0x52:
+            return MsgType::WrReqS;
+        case 0x61:
+            return MsgType::DataL;
+        case 0x62:
+            return MsgType::WrReqL;
+        default:
+            return std::nullopt;
+    }
+}
+
+bool
+isResponseMsgType(MsgType type)
+{
+    return type == MsgType::Resp || type == MsgType::Resp2;
+}
+
+bool
+isDataMsgType(MsgType type)
+{
+    switch (type) {
+        case MsgType::DataS:
+        case MsgType::WrReqS:
+        case MsgType::DataL:
+        case MsgType::WrReqL:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool
+isShortDataMsgType(MsgType type)
+{
+    return type == MsgType::DataS || type == MsgType::WrReqS;
+}
+
+unsigned
+granuleGroup(unsigned granule)
+{
+    assert(granule >= 1 && granule <= NUM_MSG_GRANULES);
+    return (granule - 1) / GRANULES_PER_GROUP;
+}
+
+unsigned
+granuleIndexInGroup(unsigned granule)
+{
+    assert(granule >= 1 && granule <= NUM_MSG_GRANULES);
+    return (granule - 1) % GRANULES_PER_GROUP;
+}
+
+bool
+granuleHasData(const C2CContainer &container, unsigned granule)
+{
+    const uint8_t *ptr = container.granuleData(granule);
+    return std::any_of(ptr, ptr + GRANULE_SIZE,
+                       [](uint8_t byte) { return byte != 0; });
+}
+
 C2CContainer::C2CContainer()
 {
     std::memset(&hdr_, 0, sizeof(hdr_));
-    payload_.fill(0);
+    granules_.fill(0);
+    occupied_.fill(false);
 }
 
 bool
@@ -84,6 +233,7 @@ C2CContainer::setMsgStart(unsigned granule, bool val)
     assert(granule >= 1 && granule <= NUM_MSG_GRANULES);
     if (val) {
         hdr_.msgStart |= (1u << (granule - 1));
+        occupied_[granule - 1] = true;
     } else {
         hdr_.msgStart &= ~(1u << (granule - 1));
     }
@@ -92,21 +242,7 @@ C2CContainer::setMsgStart(unsigned granule, bool val)
 unsigned
 C2CContainer::granulesUsed() const
 {
-    unsigned count = 0;
-    unsigned g = 1;
-    while (g <= NUM_MSG_GRANULES) {
-        if (msgStart(g)) {
-            unsigned next = g + 1;
-            while (next <= NUM_MSG_GRANULES && !msgStart(next)) {
-                next++;
-            }
-            count += (next - g);
-            g = next;
-        } else {
-            g++;
-        }
-    }
-    return count;
+    return std::count(occupied_.begin(), occupied_.end(), true);
 }
 
 float
@@ -119,40 +255,114 @@ uint8_t *
 C2CContainer::granuleData(unsigned granule)
 {
     assert(granule >= 1 && granule <= NUM_MSG_GRANULES);
-    return &payload_[(granule - 1) * GRANULE_SIZE];
+    return &granules_[(granule - 1) * GRANULE_SIZE];
 }
 
 const uint8_t *
 C2CContainer::granuleData(unsigned granule) const
 {
     assert(granule >= 1 && granule <= NUM_MSG_GRANULES);
-    return &payload_[(granule - 1) * GRANULE_SIZE];
+    return &granules_[(granule - 1) * GRANULE_SIZE];
+}
+
+bool
+C2CContainer::granuleOccupied(unsigned granule) const
+{
+    assert(granule >= 1 && granule <= NUM_MSG_GRANULES);
+    return occupied_[granule - 1];
+}
+
+void
+C2CContainer::setGranuleOccupied(unsigned granule, bool occupied)
+{
+    assert(granule >= 1 && granule <= NUM_MSG_GRANULES);
+    occupied_[granule - 1] = occupied;
 }
 
 unsigned
 C2CContainer::granuleSize(unsigned granule) const
 {
     assert(granule >= 1 && granule <= NUM_MSG_GRANULES);
-    // Granule 12 is only 16 bytes (256 - 240 = 16)
-    if (granule == NUM_MSG_GRANULES) {
-        return CONTAINER_SIZE - PROTHDR_SIZE -
-               (NUM_MSG_GRANULES - 1) * GRANULE_SIZE;
-    }
     return GRANULE_SIZE;
 }
 
 void
 C2CContainer::serialize(uint8_t *buf) const
 {
-    std::memcpy(buf, &hdr_, PROTHDR_SIZE);
-    std::memcpy(buf + PROTHDR_SIZE, payload_.data(), payload_.size());
+    std::memset(buf, 0, CONTAINER_SIZE);
+
+    std::array<uint8_t, PROTHDR_WIRE_SIZE> hdrBytes = {};
+    hdrBytes[0] = (hdr_.reqCredit & 0x0f) | ((hdr_.rspCredit & 0x0f) << 4);
+    hdrBytes[1] = (hdr_.datCredit & 0x0f) | ((hdr_.snpCredit & 0x0f) << 4);
+    hdrBytes[2] = hdr_.msgStart & 0xff;
+    hdrBytes[3] = (hdr_.msgStart >> 8) & 0x0f;
+
+    for (unsigned i = 0; i < PROTHDR_WIRE_SIZE; ++i) {
+        buf[ProtHdrWireOffsets[i]] = hdrBytes[i];
+    }
+
+    for (unsigned granule = 1; granule <= NUM_MSG_GRANULES; ++granule) {
+        std::memcpy(buf + GranuleWireOffsets[granule - 1],
+                    granuleData(granule), GRANULE_SIZE);
+    }
 }
 
 void
 C2CContainer::deserialize(const uint8_t *buf)
 {
-    std::memcpy(&hdr_, buf, PROTHDR_SIZE);
-    std::memcpy(payload_.data(), buf + PROTHDR_SIZE, payload_.size());
+    std::array<uint8_t, PROTHDR_WIRE_SIZE> hdrBytes = {};
+    for (unsigned i = 0; i < PROTHDR_WIRE_SIZE; ++i) {
+        hdrBytes[i] = buf[ProtHdrWireOffsets[i]];
+    }
+
+    hdr_.reqCredit = hdrBytes[0] & 0x0f;
+    hdr_.rspCredit = (hdrBytes[0] >> 4) & 0x0f;
+    hdr_.datCredit = hdrBytes[1] & 0x0f;
+    hdr_.snpCredit = (hdrBytes[1] >> 4) & 0x0f;
+    hdr_.msgStart = static_cast<uint16_t>(hdrBytes[2]) |
+                    (static_cast<uint16_t>(hdrBytes[3] & 0x0f) << 8);
+    hdr_.containerValid = 0;
+
+    for (unsigned granule = 1; granule <= NUM_MSG_GRANULES; ++granule) {
+        std::memcpy(granuleData(granule),
+                    buf + GranuleWireOffsets[granule - 1], GRANULE_SIZE);
+    }
+
+    occupied_.fill(false);
+    for (unsigned granule = 1; granule <= NUM_MSG_GRANULES; ++granule) {
+        if (!msgStart(granule)) {
+            continue;
+        }
+
+        const auto type = decodeMsgType(granuleData(granule)[0]);
+        if (!type) {
+            occupied_[granule - 1] = true;
+            continue;
+        }
+
+        occupied_[granule - 1] = true;
+        if (isResponseMsgType(*type)) {
+            continue;
+        }
+
+        const unsigned needed = granulesForMsgType(*type);
+        if (granule + needed - 1 > NUM_MSG_GRANULES) {
+            continue;
+        }
+
+        for (unsigned g = granule; g < granule + needed; ++g) {
+            occupied_[g - 1] = true;
+        }
+    }
+
+    for (unsigned granule = 1; granule <= NUM_MSG_GRANULES; ++granule) {
+        if (!occupied_[granule - 1] && granuleHasData(*this, granule)) {
+            occupied_[granule - 1] = true;
+        }
+    }
+
+    hdr_.containerValid = hdr_.msgStart || hdr_.reqCredit || hdr_.rspCredit ||
+                          hdr_.datCredit || hdr_.snpCredit;
 }
 
 } // namespace chi_c2c
