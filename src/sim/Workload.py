@@ -137,6 +137,21 @@ class SEWorkload(Workload, metaclass=SEWorkloadMeta):
     cxx_class = "gem5::SEWorkload"
     abstract = True
 
+    @cxxMethod
+    def allocPhysPages(self, npages, pool_id=0):
+        """Allocate contiguous physical pages from the selected memory pool."""
+        pass
+
+    @cxxMethod
+    def memSize(self, pool_id=0):
+        """Return the total bytes backed by a memory pool."""
+        pass
+
+    @cxxMethod
+    def freeMemSize(self, pool_id=0):
+        """Return the currently free bytes in a memory pool."""
+        pass
+
     @classmethod
     def _is_compatible_with(cls, obj):
         return False

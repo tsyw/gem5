@@ -25,6 +25,7 @@
 
 from m5.objects.Workload import SEWorkload
 from m5.params import *
+from m5.SimObject import cxxMethod
 
 
 class ArmSEWorkload(SEWorkload):
@@ -32,6 +33,18 @@ class ArmSEWorkload(SEWorkload):
     cxx_header = "arch/arm/se_workload.hh"
     cxx_class = "gem5::ArmISA::SEWorkload"
     abstract = True
+
+    @cxxMethod
+    def allocPhysPages(self, npages, pool_id=0):
+        pass
+
+    @cxxMethod
+    def memSize(self, pool_id=0):
+        pass
+
+    @cxxMethod
+    def freeMemSize(self, pool_id=0):
+        pass
 
 
 class ArmEmuLinux(ArmSEWorkload):
