@@ -102,6 +102,12 @@ class C2CCreditManager
         return (it != s_registry.end()) ? it->second : nullptr;
     }
 
+    static size_t
+    registrySize()
+    {
+        return s_registry.size();
+    }
+
     // --- Credit availability queries (called from SLICC) ---
 
     /** Check if REQ credit is available for the given RP. */

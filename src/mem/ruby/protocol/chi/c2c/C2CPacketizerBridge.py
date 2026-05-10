@@ -56,4 +56,18 @@ class C2CPacketizerBridge(ClockedObject):
     container_latency = Param.Int(
         1, "Per-container latency across the C2C link (cycles)"
     )
+    txq_size = Param.Unsigned(
+        0,
+        "Max buffered granules across all TX channels (0 = unlimited). "
+        "When full, no further messages are drained from TX input buffers "
+        "until the bridge drains below capacity. Supports TXQ sweep "
+        "(paper: 128 and 256 granule configurations).",
+    )
     ruby_system = Param.RubySystem("Ruby system reference")
+
+    tx_controller = Param.RubyController(
+        "TX-side controller (credit drain source)"
+    )
+    rx_controller = Param.RubyController(
+        "RX-side controller (credit apply target)"
+    )
