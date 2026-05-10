@@ -72,28 +72,48 @@ class Throttle : public Consumer
   private:
     Throttle(int sID, RubySystem *rs, NodeID node, Cycles link_latency,
              int endpoint_bandwidth, Switch *em, std::string link_name);
+
   public:
     Throttle(int sID, RubySystem *rs, NodeID node, Cycles link_latency,
-             int link_bandwidth_multiplier, int endpoint_bandwidth,
-             Switch *em, std::string link_name);
+             int link_bandwidth_multiplier, int endpoint_bandwidth, Switch *em,
+             std::string link_name);
     Throttle(int sID, RubySystem *rs, NodeID node, Cycles link_latency,
              const std::vector<int> &vnet_channels,
              const std::vector<int> &vnet_bandwidth_multiplier,
              int endpoint_bandwidth, Switch *em, std::string link_name);
     ~Throttle() {}
 
-    std::string name()
-    { return csprintf("Throttle-%i", m_switch_id); }
+    std::string
+    name()
+    {
+        return csprintf("Throttle-%i", m_switch_id);
+    }
 
-    void addLinks(const std::vector<MessageBuffer*>& in_vec,
-                  const std::vector<MessageBuffer*>& out_vec);
+    void addLinks(const std::vector<MessageBuffer *> &in_vec,
+                  const std::vector<MessageBuffer *> &out_vec);
     void wakeup();
 
     // The average utilization (a fraction) since last clearStats()
-    const statistics::Formula & getUtilization() const
-    { return throttleStats.link_utilization; }
-    const statistics::Vector & getMsgCount(unsigned int type) const
-    { return *(throttleStats.msg_counts[type]); }
+    const statistics::Formula &
+    getUtilization() const
+    {
+        return throttleStats.link_utilization;
+    }
+    const statistics::Vector &
+    getMsgCount(unsigned int type) const
+    {
+        return *(throttleStats.msg_counts[type]);
+    }
+    const statistics::Scalar &
+    getStallCy() const
+    {
+        return throttleStats.total_stall_cy;
+    }
+    const statistics::Scalar &
+    getMsgCount() const
+    {
+        return throttleStats.total_msg_count;
+    }
 
     int getLinkBandwidth(int vnet) const;
 
@@ -101,9 +121,13 @@ class Throttle : public Consumer
 
     int getChannelCnt(int vnet) const;
 
-    Cycles getLatency() const { return m_link_latency; }
+    Cycles
+    getLatency() const
+    {
+        return m_link_latency;
+    }
 
-    void print(std::ostream& out) const;
+    void print(std::ostream &out) const;
 
   private:
     void init(NodeID node, Cycles link_latency, int link_bandwidth_multiplier,
@@ -113,11 +137,11 @@ class Throttle : public Consumer
                      MessageBuffer *in, MessageBuffer *out);
 
     // Private copy constructor and assignment operator
-    Throttle(const Throttle& obj);
-    Throttle& operator=(const Throttle& obj);
+    Throttle(const Throttle &obj);
+    Throttle &operator=(const Throttle &obj);
 
-    std::vector<MessageBuffer*> m_in;
-    std::vector<MessageBuffer*> m_out;
+    std::vector<MessageBuffer *> m_in;
+    std::vector<MessageBuffer *> m_out;
     unsigned int m_vnets;
     std::vector<std::vector<int>> m_units_remaining;
 
@@ -143,8 +167,8 @@ class Throttle : public Consumer
         // Statistical variables
         statistics::Scalar acc_link_utilization;
         statistics::Formula link_utilization;
-        statistics::Vector* msg_counts[MessageSizeType_NUM];
-        statistics::Formula* msg_bytes[MessageSizeType_NUM];
+        statistics::Vector *msg_counts[MessageSizeType_NUM];
+        statistics::Formula *msg_bytes[MessageSizeType_NUM];
 
         statistics::Scalar total_msg_count;
         statistics::Scalar total_msg_bytes;
@@ -153,13 +177,14 @@ class Throttle : public Consumer
         statistics::Scalar total_stall_cy;
         statistics::Scalar total_bw_sat_cy;
         statistics::Formula avg_msg_wait_time;
+        statistics::Formula avg_stall_cy;
         statistics::Formula avg_bandwidth;
         statistics::Formula avg_useful_bandwidth;
     } throttleStats;
 };
 
-inline std::ostream&
-operator<<(std::ostream& out, const Throttle& obj)
+inline std::ostream &
+operator<<(std::ostream &out, const Throttle &obj)
 {
     obj.print(out);
     out << std::flush;

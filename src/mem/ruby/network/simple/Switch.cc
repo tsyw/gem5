@@ -55,15 +55,16 @@ namespace ruby
 using stl_helpers::operator<<;
 
 Switch::Switch(const Params &p)
-  : BasicRouter(p),
-    perfectSwitch(m_id, this, p.virt_nets),
-    m_int_routing_latency(p.int_routing_latency),
-    m_ext_routing_latency(p.ext_routing_latency),
-    m_routing_unit(*p.routing_unit), m_num_connected_buffers(0),
-    switchStats(this)
+    : BasicRouter(p),
+      perfectSwitch(m_id, this, p.virt_nets),
+      m_int_routing_latency(p.int_routing_latency),
+      m_ext_routing_latency(p.ext_routing_latency),
+      m_routing_unit(*p.routing_unit),
+      m_num_connected_buffers(0),
+      switchStats(this)
 {
     m_port_buffers.reserve(p.port_buffers.size());
-    for (auto& buffer : p.port_buffers) {
+    for (auto &buffer : p.port_buffers) {
         m_port_buffers.emplace_back(buffer);
     }
 }
@@ -77,18 +78,16 @@ Switch::init()
 }
 
 void
-Switch::addInPort(const std::vector<MessageBuffer*>& in)
+Switch::addInPort(const std::vector<MessageBuffer *> &in)
 {
     perfectSwitch.addInPort(in);
 }
 
 void
 Switch::addOutPort(std::string link_name,
-                   const std::vector<MessageBuffer*>& out,
-                   const NetDest& routing_table_entry,
-                   Cycles link_latency, int link_weight,
-                   int bw_multiplier,
-                   bool is_external,
+                   const std::vector<MessageBuffer *> &out,
+                   const NetDest &routing_table_entry, Cycles link_latency,
+                   int link_weight, int bw_multiplier, bool is_external,
                    PortDirection dst_inport)
 {
     const std::vector<int> &physical_vnets_channels =
@@ -102,29 +101,29 @@ Switch::addOutPort(std::string link_name,
             m_network_ptr->params().physical_vnets_bandwidth;
         physical_vnets_bandwidth.resize(out.size(), bw_multiplier);
 
-        throttles.emplace_back(m_id, m_network_ptr->params().ruby_system,
-            throttles.size(), link_latency,
-            physical_vnets_channels, physical_vnets_bandwidth,
+        throttles.emplace_back(
+            m_id, m_network_ptr->params().ruby_system, throttles.size(),
+            link_latency, physical_vnets_channels, physical_vnets_bandwidth,
             m_network_ptr->getEndpointBandwidth(), this, link_name);
     } else {
         throttles.emplace_back(m_id, m_network_ptr->params().ruby_system,
-            throttles.size(), link_latency, bw_multiplier,
-            m_network_ptr->getEndpointBandwidth(), this, link_name);
+                               throttles.size(), link_latency, bw_multiplier,
+                               m_network_ptr->getEndpointBandwidth(), this,
+                               link_name);
     }
 
     // Create one buffer per vnet (these are intermediaryQueues)
-    std::vector<MessageBuffer*> intermediateBuffers;
+    std::vector<MessageBuffer *> intermediateBuffers;
 
     for (int i = 0; i < out.size(); ++i) {
         assert(m_num_connected_buffers < m_port_buffers.size());
-        MessageBuffer* buffer_ptr =
-            m_port_buffers[m_num_connected_buffers];
+        MessageBuffer *buffer_ptr = m_port_buffers[m_num_connected_buffers];
         m_num_connected_buffers++;
         intermediateBuffers.push_back(buffer_ptr);
     }
 
-    Tick routing_latency = is_external ? cyclesToTicks(m_ext_routing_latency) :
-                                         cyclesToTicks(m_int_routing_latency);
+    Tick routing_latency = is_external ? cyclesToTicks(m_ext_routing_latency)
+                                       : cyclesToTicks(m_int_routing_latency);
     // Hook the queues to the PerfectSwitch
     perfectSwitch.addOutPort(intermediateBuffers, routing_table_entry,
                              dst_inport, routing_latency, link_weight);
@@ -134,7 +133,7 @@ Switch::addOutPort(std::string link_name,
 }
 
 void
-Switch::print(std::ostream& out) const
+Switch::print(std::ostream &out) const
 {
     // FIXME printing
     out << "[Switch]";
@@ -144,8 +143,9 @@ bool
 Switch::functionalRead(Packet *pkt)
 {
     for (unsigned int i = 0; i < m_port_buffers.size(); ++i) {
-        if (m_port_buffers[i]->functionalRead(pkt))
+        if (m_port_buffers[i]->functionalRead(pkt)) {
             return true;
+        }
     }
     return false;
 }
@@ -155,8 +155,9 @@ Switch::functionalRead(Packet *pkt, WriteMask &mask)
 {
     bool read = false;
     for (unsigned int i = 0; i < m_port_buffers.size(); ++i) {
-        if (m_port_buffers[i]->functionalRead(pkt, mask))
+        if (m_port_buffers[i]->functionalRead(pkt, mask)) {
             read = true;
+        }
     }
     return read;
 }
@@ -176,7 +177,15 @@ Switch::SwitchStats::SwitchStats(Switch *parent)
     : statistics::Group(parent),
       parent(parent),
       ADD_STAT(percent_links_utilized, statistics::units::Ratio::get(),
-               "Percent utilization of all links (out of 100)")
+               "Percent utilization of all links (out of 100)"),
+      ADD_STAT(total_stall_cy, statistics::units::Cycle::get(),
+               "Total stall cycles summed across all output ports"),
+      ADD_STAT(total_msg_count, statistics::units::Count::get(),
+               "Total messages forwarded by this switch"),
+      ADD_STAT(avg_stall_cy, statistics::units::Ratio::get(),
+               "Average stall cycles per message forwarded by this switch"),
+      ADD_STAT(m_in_link_msg_count, statistics::units::Count::get(),
+               "Messages received per input link (indexed by input port)")
 {
     for (unsigned int type = MessageSizeType_FIRST; type < MessageSizeType_NUM;
          ++type) {
@@ -205,8 +214,15 @@ Switch::SwitchStats::regStats()
     // Note: Throttles are not available at construction time only at regStats
     for (const auto &throttle : parent->throttles) {
         percent_links_utilized += throttle.getUtilization();
+        total_stall_cy += throttle.getStallCy();
+        total_msg_count += throttle.getMsgCount();
     }
     percent_links_utilized /= statistics::constant(parent->throttles.size());
+
+    avg_stall_cy = total_stall_cy / total_msg_count;
+
+    m_in_link_msg_count.init(parent->perfectSwitch.getInLinks())
+        .flags(statistics::nozero);
 
     for (unsigned int type = MessageSizeType_FIRST; type < MessageSizeType_NUM;
          ++type) {

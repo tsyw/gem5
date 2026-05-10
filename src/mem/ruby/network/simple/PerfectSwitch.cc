@@ -61,7 +61,8 @@ const int PRIORITY_SWITCH_LIMIT = 128;
 
 PerfectSwitch::PerfectSwitch(SwitchID sid, Switch *sw, uint32_t virt_nets)
     : Consumer(sw, Switch::PERFECTSWITCH_EV_PRI),
-      m_switch_id(sid), m_switch(sw)
+      m_switch_id(sid),
+      m_switch(sw)
 {
     m_wakeups_wo_switch = 0;
     m_virtual_networks = virt_nets;
@@ -72,13 +73,13 @@ PerfectSwitch::init(SimpleNetwork *network_ptr)
 {
     m_network_ptr = network_ptr;
 
-    for (int i = 0;i < m_virtual_networks;++i) {
+    for (int i = 0; i < m_virtual_networks; ++i) {
         m_pending_message_count.push_back(0);
     }
 }
 
 void
-PerfectSwitch::addInPort(const std::vector<MessageBuffer*>& in)
+PerfectSwitch::addInPort(const std::vector<MessageBuffer *> &in)
 {
     NodeID port = m_in.size();
     m_in.push_back(in);
@@ -94,7 +95,7 @@ PerfectSwitch::addInPort(const std::vector<MessageBuffer*>& in)
 }
 
 void
-PerfectSwitch::updatePriorityGroups(int vnet, MessageBuffer* in_buf)
+PerfectSwitch::updatePriorityGroups(int vnet, MessageBuffer *in_buf)
 {
     while (m_in_prio.size() <= vnet) {
         m_in_prio.emplace_back();
@@ -104,47 +105,43 @@ PerfectSwitch::updatePriorityGroups(int vnet, MessageBuffer* in_buf)
     m_in_prio[vnet].push_back(in_buf);
 
     std::sort(m_in_prio[vnet].begin(), m_in_prio[vnet].end(),
-        [](const MessageBuffer* i, const MessageBuffer* j)
-        { return i->routingPriority() < j->routingPriority(); });
+              [](const MessageBuffer *i, const MessageBuffer *j) {
+                  return i->routingPriority() < j->routingPriority();
+              });
 
     // reset groups
     m_in_prio_groups[vnet].clear();
     int cur_prio = m_in_prio[vnet].front()->routingPriority();
     m_in_prio_groups[vnet].emplace_back();
     for (auto buf : m_in_prio[vnet]) {
-        if (buf->routingPriority() != cur_prio)
+        if (buf->routingPriority() != cur_prio) {
             m_in_prio_groups[vnet].emplace_back();
+        }
         m_in_prio_groups[vnet].back().push_back(buf);
     }
 }
 
 void
-PerfectSwitch::addOutPort(const std::vector<MessageBuffer*>& out,
-                          const NetDest& routing_table_entry,
+PerfectSwitch::addOutPort(const std::vector<MessageBuffer *> &out,
+                          const NetDest &routing_table_entry,
                           const PortDirection &dst_inport,
-                          Tick routing_latency,
-                          int link_weight)
+                          Tick routing_latency, int link_weight)
 {
     // Add to routing unit
-    m_switch->getRoutingUnit().addOutPort(m_out.size(),
-                                          out,
-                                          routing_table_entry,
-                                          dst_inport,
-                                          link_weight);
+    m_switch->getRoutingUnit().addOutPort(
+        m_out.size(), out, routing_table_entry, dst_inport, link_weight);
     m_out.push_back({routing_latency, out});
 }
 
 PerfectSwitch::~PerfectSwitch()
-{
-}
+{}
 
-MessageBuffer*
+MessageBuffer *
 PerfectSwitch::inBuffer(int in_port, int vnet) const
 {
     if (m_in[in_port].size() <= vnet) {
         return nullptr;
-    }
-    else {
+    } else {
         return m_in[in_port][vnet];
     }
 }
@@ -152,8 +149,9 @@ PerfectSwitch::inBuffer(int in_port, int vnet) const
 void
 PerfectSwitch::operateVnet(int vnet)
 {
-    if (m_pending_message_count[vnet] == 0)
+    if (m_pending_message_count[vnet] == 0) {
         return;
+    }
 
     for (auto &in : m_in_prio_groups[vnet]) {
         // first check the port with the oldest message
@@ -163,21 +161,23 @@ PerfectSwitch::operateVnet(int vnet)
             MessageBuffer *buffer = in[i];
             if (buffer) {
                 Tick ready_time = buffer->readyTime();
-                if (ready_time < lowest_tick){
+                if (ready_time < lowest_tick) {
                     lowest_tick = ready_time;
                     start_in_port = i;
                 }
             }
         }
-        DPRINTF(RubyNetwork, "vnet %d: %d pending msgs. "
-                            "Checking port %d first\n",
+        DPRINTF(RubyNetwork,
+                "vnet %d: %d pending msgs. "
+                "Checking port %d first\n",
                 vnet, m_pending_message_count[vnet], start_in_port);
         // check all ports starting with the one with the oldest message
         for (int i = 0; i < in.size(); ++i) {
             int in_port = (i + start_in_port) % in.size();
             MessageBuffer *buffer = in[in_port];
-            if (buffer)
+            if (buffer) {
                 operateMessageBuffer(buffer, vnet);
+            }
         }
     }
 }
@@ -201,7 +201,6 @@ PerfectSwitch::operateMessageBuffer(MessageBuffer *buffer, int vnet)
         net_msg_ptr = msg_ptr.get();
         DPRINTF(RubyNetwork, "Message: %s\n", (*net_msg_ptr));
 
-
         output_links.clear();
         m_switch->getRoutingUnit().route(*net_msg_ptr, vnet,
                                          m_network_ptr->isVNetOrdered(vnet),
@@ -213,10 +212,12 @@ PerfectSwitch::operateMessageBuffer(MessageBuffer *buffer, int vnet)
             int outgoing = output_links[i].m_link_id;
             OutputPort &out_port = m_out[outgoing];
 
-            if (!out_port.buffers[vnet]->areNSlotsAvailable(1, current_time))
+            if (!out_port.buffers[vnet]->areNSlotsAvailable(1, current_time)) {
                 enough = false;
+            }
 
-            DPRINTF(RubyNetwork, "Checking if node is blocked ..."
+            DPRINTF(RubyNetwork,
+                    "Checking if node is blocked ..."
                     "outgoing: %d, vnet: %d, enough: %d\n",
                     outgoing, vnet, enough);
         }
@@ -225,7 +226,7 @@ PerfectSwitch::operateMessageBuffer(MessageBuffer *buffer, int vnet)
         if (!enough) {
             scheduleEvent(Cycles(1));
             DPRINTF(RubyNetwork, "Can't deliver message since a node "
-                    "is blocked\n");
+                                 "is blocked\n");
             DPRINTF(RubyNetwork, "Message: %s\n", (*net_msg_ptr));
             break; // go to next incoming port
         }
@@ -246,9 +247,10 @@ PerfectSwitch::operateMessageBuffer(MessageBuffer *buffer, int vnet)
         // Dequeue msg
         buffer->dequeue(current_time);
         m_pending_message_count[vnet]--;
+        m_switch->incrInLinkCount(buffer->getIncomingLink());
 
         // Enqueue it - for all outgoing queues
-        for (int i=0; i<output_links.size(); i++) {
+        for (int i = 0; i < output_links.size(); i++) {
             int outgoing = output_links[i].m_link_id;
             OutputPort &out_port = m_out[outgoing];
 
@@ -263,12 +265,14 @@ PerfectSwitch::operateMessageBuffer(MessageBuffer *buffer, int vnet)
             net_msg_ptr->getDestination() = output_links[i].m_destinations;
 
             // Enqeue msg
-            DPRINTF(RubyNetwork, "Enqueuing net msg from "
+            DPRINTF(RubyNetwork,
+                    "Enqueuing net msg from "
                     "inport[%d][%d] to outport [%d][%d].\n",
                     buffer->getIncomingLink(), vnet, outgoing, vnet);
 
-            out_port.buffers[vnet]->enqueue(msg_ptr, current_time,
-                out_port.latency, m_switch->getNetPtr()->getRandomization(),
+            out_port.buffers[vnet]->enqueue(
+                msg_ptr, current_time, out_port.latency,
+                m_switch->getNetPtr()->getRandomization(),
                 m_switch->getNetPtr()->getWarmupEnabled());
         }
     }
@@ -279,7 +283,7 @@ PerfectSwitch::wakeup()
 {
     // Give the highest numbered link priority most of the time
     m_wakeups_wo_switch++;
-    int highest_prio_vnet = m_virtual_networks-1;
+    int highest_prio_vnet = m_virtual_networks - 1;
     int lowest_prio_vnet = 0;
     int decrementer = 1;
 
@@ -287,7 +291,7 @@ PerfectSwitch::wakeup()
     if (m_wakeups_wo_switch > PRIORITY_SWITCH_LIMIT) {
         m_wakeups_wo_switch = 0;
         highest_prio_vnet = 0;
-        lowest_prio_vnet = m_virtual_networks-1;
+        lowest_prio_vnet = m_virtual_networks - 1;
         decrementer = -1;
     }
 
@@ -306,7 +310,7 @@ PerfectSwitch::storeEventInfo(int info)
 }
 
 void
-PerfectSwitch::print(std::ostream& out) const
+PerfectSwitch::print(std::ostream &out) const
 {
     out << "[PerfectSwitch " << m_switch_id << "]";
 }

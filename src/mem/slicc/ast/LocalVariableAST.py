@@ -45,7 +45,7 @@ class LocalVariableAST(StatementAST):
     def name(self):
         return self.var_name
 
-    def inline(self, get_type=False):
+    def inline(self, get_type=False, **kwargs):
         code = self.slicc.codeFormatter(fix_newlines=False)
         return_type = self.generate(code)
         if get_type:
