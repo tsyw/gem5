@@ -1,0 +1,214 @@
+/*
+ * Copyright (c) 2025 The gem5 Contributors
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met: redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer;
+ * redistributions in binary form must reproduce the above copyright
+ * notice, this list of conditions and the following disclaimer in the
+ * documentation and/or other materials provided with the distribution;
+ * neither the name of the copyright holders nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+// CHI C2C Gateway port definitions
+
+////////////////////////////////////////////////////////////////////////////
+// Outbound port definitions
+////////////////////////////////////////////////////////////////////////////
+
+// NoC-side outbound ports
+out_port(reqOutPort, CHIRequestMsg, reqOut);
+out_port(snpOutPort, CHIRequestMsg, snpOut);
+out_port(rspOutPort, CHIResponseMsg, rspOut);
+out_port(datOutPort, CHIDataMsg, datOut);
+
+// C2C-side outbound ports
+out_port(c2cTxReqOutPort, CHIRequestMsg, c2cTxReq);
+out_port(c2cTxSnpOutPort, CHIRequestMsg, c2cTxSnp);
+out_port(c2cTxRspOutPort, CHIResponseMsg, c2cTxRsp);
+out_port(c2cTxDatOutPort, CHIDataMsg, c2cTxDat);
+
+// Internal trigger ports
+out_port(triggerOutPort, TriggerMsg, triggerQueue);
+out_port(retryTriggerOutPort, RetryTriggerMsg, retryTriggerQueue);
+out_port(reqRdyOutPort, CHIRequestMsg, reqRdy);
+
+// Include helper functions (must come after out_port declarations)
+include "CHI-c2c-funcs.sm";
+
+////////////////////////////////////////////////////////////////////////////
+// Inbound port definitions (ordered by rank - highest priority first)
+////////////////////////////////////////////////////////////////////////////
+
+// Rank 12: C2C RX Response (highest priority)
+in_port(c2cRxRspInPort, CHIResponseMsg, c2cRxRsp, rank=12,
+        rsc_stall_handler=c2cRxRspInPort_stall) {
+  if (c2cRxRspInPort.isReady(clockEdge())) {
+    printResources();
+    peek(c2cRxRspInPort, CHIResponseMsg) {
+      TBE tbe := TBEs[in_msg.addr];
+      trigger(respToEvent(in_msg.type), in_msg.addr, tbe);
+    }
+  }
+}
+bool c2cRxRspInPort_stall() {
+  error("c2cRxRspInPort must never stall\n");
+  return false;
+}
+
+// Rank 11: C2C RX Data
+in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
+        rsc_stall_handler=c2cRxDatInPort_stall) {
+  if (c2cRxDatInPort.isReady(clockEdge())) {
+    printResources();
+    peek(c2cRxDatInPort, CHIDataMsg) {
+      TBE tbe := TBEs[in_msg.addr];
+      trigger(dataToEvent(in_msg.type), in_msg.addr, tbe);
+    }
+  }
+}
+bool c2cRxDatInPort_stall() {
+  error("c2cRxDatInPort must never stall\n");
+  return false;
+}
+
+// Rank 10: NoC Response
+in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
+        rsc_stall_handler=rspInPort_stall) {
+  if (rspInPort.isReady(clockEdge())) {
+    printResources();
+    peek(rspInPort, CHIResponseMsg) {
+      TBE tbe := TBEs[in_msg.addr];
+      trigger(respToEvent(in_msg.type), in_msg.addr, tbe);
+    }
+  }
+}
+bool rspInPort_stall() {
+  error("rspInPort must never stall\n");
+  return false;
+}
+
+// Rank 9: NoC Data
+in_port(datInPort, CHIDataMsg, datIn, rank=9,
+        rsc_stall_handler=datInPort_stall) {
+  if (datInPort.isReady(clockEdge())) {
+    printResources();
+    peek(datInPort, CHIDataMsg) {
+      TBE tbe := TBEs[in_msg.addr];
+      trigger(dataToEvent(in_msg.type), in_msg.addr, tbe);
+    }
+  }
+}
+bool datInPort_stall() {
+  error("datInPort must never stall\n");
+  return false;
+}
+
+// Rank 7: C2C RX Snoop
+in_port(c2cRxSnpInPort, CHIRequestMsg, c2cRxSnp, rank=7) {
+  if (c2cRxSnpInPort.isReady(clockEdge())) {
+    printResources();
+    peek(c2cRxSnpInPort, CHIRequestMsg) {
+      // Phase 1: stateless snoop forwarding (no TBE needed)
+      trigger(Event:InSnp_Deliver, in_msg.addr, TBEs[in_msg.addr]);
+    }
+  }
+}
+
+// Rank 6: NoC Snoop (from local HN for remote targets)
+in_port(snpInPort, CHIRequestMsg, snpIn, rank=6) {
+  if (snpInPort.isReady(clockEdge())) {
+    printResources();
+    peek(snpInPort, CHIRequestMsg) {
+      trigger(Event:OutSnp_Forward, in_msg.addr, snpTBEs[in_msg.addr]);
+    }
+  }
+}
+
+// Rank 5: Retry trigger
+in_port(retryTriggerInPort, RetryTriggerMsg, retryTriggerQueue, rank=5) {
+  if (retryTriggerInPort.isReady(clockEdge())) {
+    printResources();
+    peek(retryTriggerInPort, RetryTriggerMsg) {
+      trigger(in_msg.event, in_msg.addr, TBEs[in_msg.addr]);
+    }
+  }
+}
+
+// Rank 4: Action trigger
+in_port(triggerInPort, TriggerMsg, triggerQueue, rank=4) {
+  if (triggerInPort.isReady(clockEdge())) {
+    printResources();
+    peek(triggerInPort, TriggerMsg) {
+      trigger(in_msg.event, in_msg.addr, TBEs[in_msg.addr]);
+    }
+  }
+}
+
+// Rank 3: Requests with TBE allocated (reqRdy)
+in_port(reqRdyInPort, CHIRequestMsg, reqRdy, rank=3) {
+  if (reqRdyInPort.isReady(clockEdge())) {
+    printResources();
+    peek(reqRdyInPort, CHIRequestMsg) {
+      trigger(reqToEvent(in_msg.type), in_msg.addr, TBEs[in_msg.addr]);
+    }
+  }
+}
+
+// Rank 2: C2C RX Request
+in_port(c2cRxReqInPort, CHIRequestMsg, c2cRxReq, rank=2) {
+  if (c2cRxReqInPort.isReady(clockEdge())) {
+    printResources();
+    peek(c2cRxReqInPort, CHIRequestMsg) {
+      if (storTBEs.areNSlotsAvailable(1)) {
+        storTBEs.incrementReserved();
+        // Map C2C request events
+        if (isReadRequest(in_msg.type)) {
+          trigger(Event:InReq_Read, in_msg.addr, TBEs[in_msg.addr]);
+        } else if (isWriteRequest(in_msg.type)) {
+          trigger(Event:InReq_Write, in_msg.addr, TBEs[in_msg.addr]);
+        } else if (isAtomicRequest(in_msg.type)) {
+          trigger(Event:InReq_Atomic, in_msg.addr, TBEs[in_msg.addr]);
+        } else if (in_msg.type == CHIRequestType:Evict) {
+          trigger(Event:InReq_Evict, in_msg.addr, TBEs[in_msg.addr]);
+        } else {
+          trigger(Event:InReq_Dataless, in_msg.addr, TBEs[in_msg.addr]);
+        }
+      } else {
+        // Cannot send RetryAck across C2C; stall
+        c2cRxReqInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+      }
+    }
+  }
+}
+
+// Rank 1: NoC Request (lowest priority)
+in_port(reqInPort, CHIRequestMsg, reqIn, rank=1) {
+  if (reqInPort.isReady(clockEdge())) {
+    printResources();
+    peek(reqInPort, CHIRequestMsg) {
+      if (in_msg.allowRetry) {
+        trigger(Event:CheckAllocTBE, in_msg.addr, TBEs[in_msg.addr]);
+      } else {
+        trigger(Event:CheckAllocTBE_WithCredit,
+                in_msg.addr, TBEs[in_msg.addr]);
+      }
+    }
+  }
+}

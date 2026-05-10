@@ -1,0 +1,292 @@
+/*
+ * Copyright (c) 2025 The gem5 Contributors
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met: redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer;
+ * redistributions in binary form must reproduce the above copyright
+ * notice, this list of conditions and the following disclaimer in the
+ * documentation and/or other materials provided with the distribution;
+ * neither the name of the copyright holders nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+// CHI C2C Gateway helper functions
+
+////////////////////////////////////////////////////////////////////////////
+// External functions
+////////////////////////////////////////////////////////////////////////////
+
+Tick clockEdge();
+Tick curTick();
+Tick cyclesToTicks(Cycles c);
+void set_tbe(TBE b);
+void unset_tbe();
+void wakeUpAllBuffers(Addr a);
+MachineID mapAddressToDownstreamMachine(Addr addr);
+
+////////////////////////////////////////////////////////////////////////////
+// Interface functions required by SLICC
+////////////////////////////////////////////////////////////////////////////
+
+State getState(TBE tbe, Addr addr) {
+  if (is_valid(tbe)) {
+    return tbe.state;
+  } else {
+    return State:I;
+  }
+}
+
+void setState(TBE tbe, Addr addr, State state) {
+  if (is_valid(tbe)) {
+    tbe.state := state;
+  }
+}
+
+AccessPermission getAccessPermission(Addr addr) {
+  TBE tbe := TBEs[addr];
+  if (is_valid(tbe)) {
+    return CHI_C2C_State_to_permission(tbe.state);
+  }
+  return AccessPermission:NotPresent;
+}
+
+void setAccessPermission(Addr addr, State state) {
+}
+
+void functionalRead(Addr addr, Packet *pkt, WriteMask &mask) {
+  // C2CG does not hold cached data; nothing to provide
+  TBE tbe := TBEs[addr];
+  if (is_valid(tbe)) {
+    testAndReadMask(addr, tbe.dataBlk, mask, pkt);
+  }
+}
+
+int functionalWrite(Addr addr, Packet *pkt) {
+  int num_functional_writes := 0;
+  TBE tbe := TBEs[addr];
+  if (is_valid(tbe)) {
+    num_functional_writes := num_functional_writes +
+      testAndWrite(addr, tbe.dataBlk, pkt);
+  }
+  return num_functional_writes;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// Helper functions
+////////////////////////////////////////////////////////////////////////////
+
+void printResources() {
+  DPRINTF(RubySlicc, "Resources(avail/max): TBEs=%d/%d snpTBEs=%d/%d\n",
+                storTBEs.size(), storTBEs.capacity(),
+                storSnpTBEs.size(), storSnpTBEs.capacity());
+}
+
+// Event mapping: CHI request type -> C2CG event
+Event reqToEvent(CHIRequestType type) {
+  if (type == CHIRequestType:ReadShared) {
+    return Event:OutReq_ReadShared;
+  } else if (type == CHIRequestType:ReadUnique) {
+    return Event:OutReq_ReadUnique;
+  } else if (type == CHIRequestType:ReadOnce) {
+    return Event:OutReq_ReadOnce;
+  } else if (type == CHIRequestType:ReadNoSnp) {
+    return Event:OutReq_ReadNoSnp;
+  } else if (type == CHIRequestType:ReadNotSharedDirty) {
+    return Event:OutReq_ReadNotSharedDirty;
+  } else if (type == CHIRequestType:CleanUnique) {
+    return Event:OutReq_CleanUnique;
+  } else if (type == CHIRequestType:WriteUniqueFull) {
+    return Event:OutReq_WriteUniqueFull;
+  } else if (type == CHIRequestType:WriteUniquePtl) {
+    return Event:OutReq_WriteUniquePtl;
+  } else if (type == CHIRequestType:WriteBackFull) {
+    return Event:OutReq_WriteBackFull;
+  } else if (type == CHIRequestType:WriteCleanFull) {
+    return Event:OutReq_WriteCleanFull;
+  } else if (type == CHIRequestType:WriteEvictFull) {
+    return Event:OutReq_WriteEvictFull;
+  } else if (type == CHIRequestType:WriteNoSnp) {
+    return Event:OutReq_WriteNoSnpFull;
+  } else if (type == CHIRequestType:WriteNoSnpPtl) {
+    return Event:OutReq_WriteNoSnpPtl;
+  } else if (type == CHIRequestType:Evict) {
+    return Event:OutReq_Evict;
+  } else if (type == CHIRequestType:AtomicReturn) {
+    return Event:OutReq_AtomicLoad;
+  } else if (type == CHIRequestType:AtomicNoReturn) {
+    return Event:OutReq_AtomicStore;
+  } else {
+    error("Invalid CHIRequestType for C2CG reqToEvent");
+  }
+}
+
+// Event mapping: CHI response type -> C2CG event
+Event respToEvent(CHIResponseType type) {
+  if (type == CHIResponseType:Comp_I) {
+    return Event:RspIn_Comp;
+  } else if (type == CHIResponseType:Comp_UC) {
+    return Event:RspIn_Comp;
+  } else if (type == CHIResponseType:Comp_SC) {
+    return Event:RspIn_Comp;
+  } else if (type == CHIResponseType:Comp_UD_PD) {
+    return Event:RspIn_Comp;
+  } else if (type == CHIResponseType:Comp) {
+    return Event:RspIn_Comp;
+  } else if (type == CHIResponseType:CompDBIDResp) {
+    return Event:RspIn_CompDBIDResp;
+  } else if (type == CHIResponseType:DBIDResp) {
+    return Event:RspIn_DBIDResp;
+  } else if (type == CHIResponseType:CompAck) {
+    return Event:RspIn_CompAck;
+  } else if (type == CHIResponseType:ReadReceipt) {
+    return Event:RspIn_ReadReceipt;
+  } else if (type == CHIResponseType:RespSepData) {
+    return Event:RspIn_RespSepData;
+  } else if (type == CHIResponseType:RetryAck) {
+    return Event:RetryAckFromHN;
+  } else if (type == CHIResponseType:PCrdGrant) {
+    return Event:PCrdGrantFromHN;
+  } else if (type == CHIResponseType:SnpResp_I) {
+    return Event:RspIn_SnpResp;
+  } else if (type == CHIResponseType:SnpResp_SC) {
+    return Event:RspIn_SnpResp;
+  } else if (type == CHIResponseType:SnpResp_I_Fwded_UC) {
+    return Event:RspIn_SnpResp;
+  } else if (type == CHIResponseType:SnpResp_I_Fwded_UD_PD) {
+    return Event:RspIn_SnpResp;
+  } else if (type == CHIResponseType:SnpResp_SC_Fwded_SC) {
+    return Event:RspIn_SnpResp;
+  } else if (type == CHIResponseType:SnpResp_SC_Fwded_SD_PD) {
+    return Event:RspIn_SnpResp;
+  } else if (type == CHIResponseType:SnpResp_UC_Fwded_I) {
+    return Event:RspIn_SnpResp;
+  } else if (type == CHIResponseType:SnpResp_UD_Fwded_I) {
+    return Event:RspIn_SnpResp;
+  } else if (type == CHIResponseType:SnpResp_SC_Fwded_I) {
+    return Event:RspIn_SnpResp;
+  } else if (type == CHIResponseType:SnpResp_SD_Fwded_I) {
+    return Event:RspIn_SnpResp;
+  } else {
+    error("Invalid CHIResponseType for C2CG respToEvent");
+  }
+}
+
+// Event mapping: CHI data type -> C2CG event
+Event dataToEvent(CHIDataType type) {
+  if (type == CHIDataType:CompData_I) {
+    return Event:DatIn_CompData;
+  } else if (type == CHIDataType:CompData_UC) {
+    return Event:DatIn_CompData;
+  } else if (type == CHIDataType:CompData_SC) {
+    return Event:DatIn_CompData;
+  } else if (type == CHIDataType:CompData_UD_PD) {
+    return Event:DatIn_CompData;
+  } else if (type == CHIDataType:CompData_SD_PD) {
+    return Event:DatIn_CompData;
+  } else if (type == CHIDataType:DataSepResp_UC) {
+    return Event:DatIn_DataSepResp;
+  } else if (type == CHIDataType:CBWrData_UC) {
+    return Event:DatIn_CBWrData;
+  } else if (type == CHIDataType:CBWrData_SC) {
+    return Event:DatIn_CBWrData;
+  } else if (type == CHIDataType:CBWrData_UD_PD) {
+    return Event:DatIn_CBWrData;
+  } else if (type == CHIDataType:CBWrData_SD_PD) {
+    return Event:DatIn_CBWrData;
+  } else if (type == CHIDataType:CBWrData_I) {
+    return Event:DatIn_CBWrData;
+  } else if (type == CHIDataType:NCBWrData) {
+    return Event:DatIn_NCBWrData;
+  } else if (type == CHIDataType:SnpRespData_I) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_I_PD) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_SC) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_SC_PD) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_SD) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_UC) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_UD) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_SC_Fwded_SC) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_SC_Fwded_SD_PD) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_SC_PD_Fwded_SC) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_SD_Fwded_SC) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_I_Fwded_SD_PD) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_I_PD_Fwded_SC) {
+    return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:SnpRespData_I_Fwded_SC) {
+    return Event:DatIn_SnpRespData;
+  } else {
+    error("Invalid CHIDataType for C2CG dataToEvent");
+  }
+}
+
+// Determine if a request type is a read
+bool isReadRequest(CHIRequestType type) {
+  if ((type == CHIRequestType:ReadShared) ||
+      (type == CHIRequestType:ReadUnique) ||
+      (type == CHIRequestType:ReadOnce) ||
+      (type == CHIRequestType:ReadNoSnp) ||
+      (type == CHIRequestType:ReadNoSnpSep) ||
+      (type == CHIRequestType:ReadNotSharedDirty)) {
+    return true;
+  }
+  return false;
+}
+
+// Determine if a request type is a write
+bool isWriteRequest(CHIRequestType type) {
+  if ((type == CHIRequestType:WriteUniqueFull) ||
+      (type == CHIRequestType:WriteUniquePtl) ||
+      (type == CHIRequestType:WriteBackFull) ||
+      (type == CHIRequestType:WriteCleanFull) ||
+      (type == CHIRequestType:WriteEvictFull) ||
+      (type == CHIRequestType:WriteNoSnp) ||
+      (type == CHIRequestType:WriteNoSnpPtl)) {
+    return true;
+  }
+  return false;
+}
+
+// Determine if a request type is dataless
+bool isDatalessRequest(CHIRequestType type) {
+  if ((type == CHIRequestType:CleanUnique) ||
+      (type == CHIRequestType:Evict)) {
+    return true;
+  }
+  return false;
+}
+
+// Determine if a request type is atomic
+bool isAtomicRequest(CHIRequestType type) {
+  if ((type == CHIRequestType:AtomicReturn) ||
+      (type == CHIRequestType:AtomicNoReturn)) {
+    return true;
+  }
+  return false;
+}
