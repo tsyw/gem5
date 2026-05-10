@@ -28,7 +28,7 @@
 
 // CHI C2C Gateway Controller
 // Implements the protocol-layer gateway per IHI0098A (AMBA CHI C2C)
-// Phase 2: Protocol flows - separated comp/data, atomics, error handling
+// Phase 6: WritePush combining (WrReqDataS/L)
 
 machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
@@ -41,9 +41,30 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
   // TBE sizing
   int number_of_snoop_TBEs;
+  int number_of_dvm_TBEs := 4;
+
+  // DVM TxnID offset to avoid collision with remote MN address space
+  int dvm_txnid_offset := 65536;
+
+  // Feature support parameters (Phase 5: interface management)
+  bool timed_init := "false";
+  bool dvm_support := "true";
+  bool snoop_support := "true";
+  bool atomic_support := "true";
+  bool writepush_enabled := "true";
 
   // Data channel width
   int data_channel_size;
+
+  // Credit parameters (Phase 3: pre-configured, per Decision D8)
+  int num_resource_planes := 1;
+  int init_req_credits_per_rp := 16;
+  int init_req_credits_shared := 32;
+  int init_rsp_credits := 32;
+  int init_snp_credits := 16;
+  int init_dat_credits := 32;
+  int init_dat_credits_shared := 16;
+  int init_misc_credits := 8;
 
   // NoC-side message buffers (connected to Ruby network)
   MessageBuffer * reqOut,  network="To", virtual_network="0",
@@ -75,12 +96,50 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   MessageBuffer * c2cRxRsp;
   MessageBuffer * c2cRxDat;
 
+  // MISC channel (IHI0098A B4.8: DVM/barrier/sync messages)
+  MessageBuffer * c2cTxMisc;
+  MessageBuffer * c2cRxMisc;
+
   // Internal queues
   MessageBuffer * triggerQueue;
   MessageBuffer * retryTriggerQueue;
   MessageBuffer * reqRdy;
 
 {
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Interface-level state enums (Phase 5)
+  ////////////////////////////////////////////////////////////////////////////
+
+  enumeration(InterfaceState, desc="C2C interface state") {
+    IF_STOP,        desc="Interface stopped, no traffic permitted";
+    IF_ACTIVATE,    desc="Activation handshake in progress";
+    IF_RUN,         desc="Interface fully active";
+    IF_DEACTIVATE,  desc="Deactivation in progress, drain only";
+  }
+
+  enumeration(CoherencyState, desc="Coherency domain state") {
+    COH_DISABLED,   desc="Not participating in coherency";
+    COH_CONNECT,    desc="Coherency connection handshake in progress";
+    COH_ENABLED,    desc="Fully coherent, protocol traffic allowed";
+    COH_DISCONNECT, desc="Disconnection in progress, drain outstanding";
+  }
+
+  enumeration(DVMDomainState, desc="DVM domain state") {
+    DVM_DISABLED,   desc="DVM domain disconnected";
+    DVM_CONNECT,    desc="DVM connection handshake in progress";
+    DVM_ENABLED,    desc="DVM domain active";
+    DVM_DISCONNECT, desc="DVM disconnection in progress";
+  }
+
+  // Controller-level guard variables (instant-init defaults per D8)
+  // dvmState default matches dvm_support param default (true)
+  InterfaceState interfaceState,
+      default="CHI_C2C_InterfaceState_IF_RUN";
+  CoherencyState cohState,
+      default="CHI_C2C_CoherencyState_COH_ENABLED";
+  DVMDomainState dvmState,
+      default="CHI_C2C_DVMDomainState_DVM_ENABLED";
 
   ////////////////////////////////////////////////////////////////////////////
   // States
@@ -100,6 +159,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
         desc="DataSepResp arrived, waiting for RespSepData only";
     WR_WAIT_DBID,      AccessPermission:Busy,
         desc="Waiting for DBIDResp from remote for write";
+    EVWR_WAIT_DBID,    AccessPermission:Busy,
+        desc="Evict/clean write waiting for DBIDResp or direct Comp";
     WR_WAIT_COMP,      AccessPermission:Busy,
         desc="Waiting for Comp from remote HN for write";
     WAIT_COMPACK,      AccessPermission:Busy,
@@ -135,9 +196,41 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     ATOMIC_FWD_WAIT,   AccessPermission:Busy,
         desc="Inbound atomic waiting for CompData from local HN";
 
+    // Retry-wait states for inbound flows
+    DL_RETRY_WAIT,     AccessPermission:Busy,
+        desc="Inbound dataless retry waiting for PCrdGrant";
+    EV_RETRY_WAIT,     AccessPermission:Busy,
+        desc="Inbound Evict retry waiting for PCrdGrant";
+    ATOMIC_RETRY_WAIT, AccessPermission:Busy,
+        desc="Inbound atomic retry waiting for PCrdGrant";
+    WR_PUSH_RETRY_WAIT, AccessPermission:Busy,
+        desc="WritePush rcv retry waiting for PCrdGrant";
+
     // Snoop path
     SNP_WAIT_RESP,     AccessPermission:Busy,
         desc="Snoop forwarded across C2C, awaiting response";
+    INB_SNP_WAIT_RESP, AccessPermission:Busy,
+        desc="Inbound snoop delivered locally, awaiting response";
+
+    // DVM originator path (local MN -> C2CG -> remote MN)
+    DVM_WAIT_P2,       AccessPermission:Busy,
+        desc="DVM originator: received P1, waiting for P2";
+    DVM_WAIT_DBID,     AccessPermission:Busy,
+        desc="DVM originator: DvmOp sent, waiting for DBIDResp";
+    DVM_WAIT_COMP,     AccessPermission:Busy,
+        desc="DVM originator: NCBWrData sent, waiting for Comp";
+
+    // WritePush path (source C2CG combines req+data)
+    WR_PUSH_WAIT_DATA, AccessPermission:Busy,
+        desc="WritePush: request buffered, waiting for WriteData";
+    WR_PUSH_SENT,      AccessPermission:Busy,
+        desc="WritePush: WrReqData sent, waiting for Comp";
+
+    // WritePush receiver path (peer splits WrReqData)
+    WR_PUSH_FWD_WAIT_DBID, AccessPermission:Busy,
+        desc="WritePush rcv: REQ sent to HN, waiting for DBID";
+    WR_PUSH_FWD_WAIT_COMP, AccessPermission:Busy,
+        desc="WritePush rcv: data sent to HN, waiting for Comp";
   }
 
 
@@ -164,6 +257,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     OutReq_WriteEvictFull,       desc="WriteEvictFull for remote";
     OutReq_WriteNoSnpFull,       desc="WriteNoSnpFull for remote";
     OutReq_WriteNoSnpPtl,        desc="WriteNoSnpPtl for remote";
+    OutReq_WritePull,            desc="Write via WritePull (push disabled)";
+    OutReq_EvictWritePull,       desc="Evict/clean write via WritePull";
     OutReq_Evict,                desc="Evict for remote";
     OutReq_AtomicStore,          desc="AtomicNoReturn for remote";
     OutReq_AtomicLoad,           desc="AtomicReturn for remote";
@@ -177,6 +272,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
     // Snoop events
     OutSnp_Forward,              desc="Snoop from local HN to forward";
+    OutSnp_DvmP1,                desc="SnpDvmOp_P1 from local MN";
+    OutSnp_DvmP2,                desc="SnpDvmOp_P2 from local MN";
     InSnp_Deliver,               desc="Inbound snoop to deliver locally";
 
     // Response events
@@ -194,12 +291,16 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     DatIn_SnpRespData,           desc="SnpRespData received";
     DatIn_CBWrData,              desc="CBWrData received";
     DatIn_NCBWrData,             desc="NCBWrData received";
+    DatIn_WrReqData,             desc="WrReqDataS/L received from C2C";
 
     // Retry handling
     RetryAckFromHN,              desc="RetryAck from local HN (absorb)";
     PCrdGrantFromHN,             desc="PCrdGrant from local HN";
     SendRetryAck,                desc="Send RetryAck to requester";
     SendPCrdGrant,               desc="Send PCrdGrant to requester";
+
+    // Internal completion trigger
+    CompleteTxn,                 desc="All flits done, deallocate TBE";
   }
 
 
@@ -231,10 +332,13 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     bool expectingComp,         desc="Waiting for completion";
     int pendingSnpResps,        desc="Outstanding snoop responses";
     bool retryPending,          desc="HN sent RetryAck";
+    int resPlane,               desc="Resource Plane assignment";
+    bool usedSharedCredit,      desc="Used shared credit pool";
     Tick allocTime,             desc="Cycle when allocated";
     DataBlock dataBlk,          desc="Transaction data buffer";
     WriteMask dataBlkValid,     desc="Valid bytes in data buffer";
     int rxtxBytes,              desc="Bytes sent or received";
+    bool compAckDone,           desc="CompAck forwarded, awaiting data";
   }
 
   // TBE table for request transactions
@@ -263,11 +367,37 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   TBEStorage storTBEs,
       constructor='this, m_number_of_TBEs, "TBEs"';
 
+  // C2C Credit Manager (Phase 3)
+  structure(C2CCreditManager, external="yes") {
+    bool hasReqCredit(int rp);
+    bool hasRspCredit();
+    bool hasSnpCredit();
+    bool hasDatCredit();
+    bool consumeReqCredit(int rp);
+    void consumeRspCredit();
+    void consumeSnpCredit();
+    bool consumeDatCredit();
+    void returnReqCredit();
+    void returnRspCredit();
+    void returnSnpCredit();
+    void returnDatCredit();
+    void recordStall(int cls);
+  }
+
+  C2CCreditManager creditMgr,
+      constructor='this, m_num_resource_planes, m_init_req_credits_per_rp, m_init_req_credits_shared, m_init_rsp_credits, m_init_snp_credits, m_init_dat_credits, m_init_dat_credits_shared, m_init_misc_credits';
+
   // Separate TBE table for snoop forwarding (deadlock avoidance)
   TBETable snpTBEs, template="<CHI_C2C_TBE>",
       constructor="m_number_of_snoop_TBEs";
   TBEStorage storSnpTBEs,
       constructor='this, m_number_of_snoop_TBEs, "snpTBEs"';
+
+  // Separate TBE table for DVM originator (addr = txnId collision avoidance)
+  TBETable dvmTBEs, template="<CHI_C2C_TBE>",
+      constructor="m_number_of_dvm_TBEs";
+  TBEStorage storDvmTBEs,
+      constructor='this, m_number_of_dvm_TBEs, "dvmTBEs"';
 
   // Retry queue
   structure(RetryQueueEntry) {
@@ -302,6 +432,24 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     bool functionalWrite(Packet *pkt) { return false; }
   }
 
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Protocol-level counters (T-011)
+  ////////////////////////////////////////////////////////////////////////////
+
+  int outboundReqCount, default="0";
+  int inboundReqCount,  default="0";
+  int snpForwardCount,  default="0";
+  int retryAbsorbCount, default="0";
+  int tbeFullRetries,   default="0";
+  int writePushCount,   default="0";
+  int dvmReqsSent,      default="0";
+  // Per-transaction latency tracking (FR-C03)
+  // txnLatencySum / txnLatencyCount gives average latency in ticks
+  int txnLatencyCount,  default="0";
+  Tick txnLatencySum,   default="0";
+  Tick txnLatencyMin,   default="0xFFFFFFFFFFFFFFFF";
+  Tick txnLatencyMax,   default="0";
 
   ////////////////////////////////////////////////////////////////////////////
   // Port definitions (includes funcs.sm for helpers)

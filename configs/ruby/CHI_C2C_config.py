@@ -57,6 +57,13 @@ class CHI_C2CController(CHI_CHI_C2C_Controller):
         self.addr_ranges = addr_ranges
         self.number_of_TBEs = 32
         self.number_of_snoop_TBEs = 16
+        self.number_of_dvm_TBEs = 4
+
+        # Feature support (Phase 5: interface management)
+        self.timed_init = False
+        self.dvm_support = True
+        self.snoop_support = True
+        self.atomic_support = True
 
 
 class CHI_C2CG(CHI_Node):

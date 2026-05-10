@@ -365,7 +365,12 @@ class CHI_MNController(CHI_MiscNode_Controller):
     """
 
     def __init__(
-        self, ruby_system, addr_range, l1d_caches, early_nonsync_comp
+        self,
+        ruby_system,
+        addr_range,
+        l1d_caches,
+        early_nonsync_comp,
+        extra_upstream=None,
     ):
         super().__init__(
             version=Versions.getVersion(CHI_MiscNode_Controller),
@@ -389,7 +394,11 @@ class CHI_MNController(CHI_MiscNode_Controller):
         self.early_nonsync_comp = early_nonsync_comp
 
         # "upstream_destinations" = targets for DVM snoops
-        self.upstream_destinations = l1d_caches
+        # extra_upstream allows C2CG to receive DVM snoops for cross-chip DVM
+        upstream = list(l1d_caches)
+        if extra_upstream:
+            upstream.extend(extra_upstream)
+        self.upstream_destinations = upstream
 
 
 class CHI_DMAController(Base_CHI_Cache_Controller):
@@ -696,14 +705,24 @@ class CHI_MN(CHI_Node):
 
     # The CHI controller can be a child of this object or another if
     # 'parent' if specified
-    def __init__(self, ruby_system, l1d_caches, early_nonsync_comp=False):
+    def __init__(
+        self,
+        ruby_system,
+        l1d_caches,
+        early_nonsync_comp=False,
+        extra_upstream=None,
+    ):
         super().__init__(ruby_system)
 
         # MiscNode has internal address range starting at 0
         addr_range = AddrRange(0, size="1KiB")
 
         self._cntrl = CHI_MNController(
-            ruby_system, addr_range, l1d_caches, early_nonsync_comp
+            ruby_system,
+            addr_range,
+            l1d_caches,
+            early_nonsync_comp,
+            extra_upstream=extra_upstream,
         )
 
         self.cntrl = self._cntrl

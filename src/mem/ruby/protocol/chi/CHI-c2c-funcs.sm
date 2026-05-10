@@ -47,9 +47,13 @@ MachineID mapAddressToDownstreamMachine(Addr addr);
 State getState(TBE tbe, Addr addr) {
   if (is_valid(tbe)) {
     return tbe.state;
-  } else {
-    return State:I;
   }
+  // Check DVM TBE table (uses different address space)
+  TBE dvmTbe := dvmTBEs[addr];
+  if (is_valid(dvmTbe)) {
+    return dvmTbe.state;
+  }
+  return State:I;
 }
 
 void setState(TBE tbe, Addr addr, State state) {
@@ -63,6 +67,10 @@ AccessPermission getAccessPermission(Addr addr) {
   if (is_valid(tbe)) {
     return CHI_C2C_State_to_permission(tbe.state);
   }
+  TBE dvmTbe := dvmTBEs[addr];
+  if (is_valid(dvmTbe)) {
+    return CHI_C2C_State_to_permission(dvmTbe.state);
+  }
   return AccessPermission:NotPresent;
 }
 
@@ -70,11 +78,11 @@ void setAccessPermission(Addr addr, State state) {
 }
 
 void functionalRead(Addr addr, Packet *pkt, WriteMask &mask) {
-  // C2CG does not hold cached data; nothing to provide
   TBE tbe := TBEs[addr];
   if (is_valid(tbe)) {
     testAndReadMask(addr, tbe.dataBlk, mask, pkt);
   }
+  // DVM TBEs carry no coherent data; skip dvmTBEs probe
 }
 
 int functionalWrite(Addr addr, Packet *pkt) {
@@ -84,6 +92,7 @@ int functionalWrite(Addr addr, Packet *pkt) {
     num_functional_writes := num_functional_writes +
       testAndWrite(addr, tbe.dataBlk, pkt);
   }
+  // DVM TBEs carry no coherent data; skip dvmTBEs probe
   return num_functional_writes;
 }
 
@@ -91,10 +100,33 @@ int functionalWrite(Addr addr, Packet *pkt) {
 // Helper functions
 ////////////////////////////////////////////////////////////////////////////
 
+// Interface state guard checks (Phase 5)
+bool coherencyEnabled() {
+  return (interfaceState == InterfaceState:IF_RUN) &&
+         (cohState == CoherencyState:COH_ENABLED);
+}
+
+bool dvmEnabled() {
+  return dvm_support && coherencyEnabled() &&
+         (dvmState == DVMDomainState:DVM_ENABLED);
+}
+
 void printResources() {
-  DPRINTF(RubySlicc, "Resources(avail/max): TBEs=%d/%d snpTBEs=%d/%d\n",
+  DPRINTF(RubySlicc, "Resources(avail/max): TBEs=%d/%d snpTBEs=%d/%d dvmTBEs=%d/%d\n",
                 storTBEs.size(), storTBEs.capacity(),
-                storSnpTBEs.size(), storSnpTBEs.capacity());
+                storSnpTBEs.size(), storSnpTBEs.capacity(),
+                storDvmTBEs.size(), storDvmTBEs.capacity());
+}
+
+// Determine if a request type is dataless (no CompAck: Evict-like)
+bool isEvictLikeRequest(CHIRequestType type) {
+  if ((type == CHIRequestType:Evict) ||
+      (type == CHIRequestType:CleanShared) ||
+      (type == CHIRequestType:CleanInvalid) ||
+      (type == CHIRequestType:MakeInvalid)) {
+    return true;
+  }
+  return false;
 }
 
 // Event mapping: CHI request type -> C2CG event
@@ -125,7 +157,7 @@ Event reqToEvent(CHIRequestType type) {
     return Event:OutReq_WriteNoSnpFull;
   } else if (type == CHIRequestType:WriteNoSnpPtl) {
     return Event:OutReq_WriteNoSnpPtl;
-  } else if (type == CHIRequestType:Evict) {
+  } else if (isEvictLikeRequest(type)) {
     return Event:OutReq_Evict;
   } else if (type == CHIRequestType:AtomicReturn) {
     return Event:OutReq_AtomicLoad;
@@ -134,6 +166,46 @@ Event reqToEvent(CHIRequestType type) {
   } else {
     error("Invalid CHIRequestType for C2CG reqToEvent");
   }
+}
+
+// Check if a CHI response type is a snoop response.
+// Used to prioritize snpTBE lookup over TBE lookup in response ports,
+// preventing collision when both tables have entries for the same address.
+bool isSnpRespType(CHIResponseType type) {
+  if ((type == CHIResponseType:SnpResp_I) ||
+      (type == CHIResponseType:SnpResp_SC) ||
+      (type == CHIResponseType:SnpResp_I_Fwded_UC) ||
+      (type == CHIResponseType:SnpResp_I_Fwded_UD_PD) ||
+      (type == CHIResponseType:SnpResp_SC_Fwded_SC) ||
+      (type == CHIResponseType:SnpResp_SC_Fwded_SD_PD) ||
+      (type == CHIResponseType:SnpResp_UC_Fwded_I) ||
+      (type == CHIResponseType:SnpResp_UD_Fwded_I) ||
+      (type == CHIResponseType:SnpResp_SC_Fwded_I) ||
+      (type == CHIResponseType:SnpResp_SD_Fwded_I)) {
+    return true;
+  }
+  return false;
+}
+
+// Check if a CHI data type is a snoop response data.
+bool isSnpRespDataType(CHIDataType type) {
+  if ((type == CHIDataType:SnpRespData_I) ||
+      (type == CHIDataType:SnpRespData_I_PD) ||
+      (type == CHIDataType:SnpRespData_SC) ||
+      (type == CHIDataType:SnpRespData_SC_PD) ||
+      (type == CHIDataType:SnpRespData_SD) ||
+      (type == CHIDataType:SnpRespData_UC) ||
+      (type == CHIDataType:SnpRespData_UD) ||
+      (type == CHIDataType:SnpRespData_SC_Fwded_SC) ||
+      (type == CHIDataType:SnpRespData_SC_Fwded_SD_PD) ||
+      (type == CHIDataType:SnpRespData_SC_PD_Fwded_SC) ||
+      (type == CHIDataType:SnpRespData_SD_Fwded_SC) ||
+      (type == CHIDataType:SnpRespData_I_Fwded_SD_PD) ||
+      (type == CHIDataType:SnpRespData_I_PD_Fwded_SC) ||
+      (type == CHIDataType:SnpRespData_I_Fwded_SC)) {
+    return true;
+  }
+  return false;
 }
 
 // Event mapping: CHI response type -> C2CG event
@@ -241,6 +313,10 @@ Event dataToEvent(CHIDataType type) {
     return Event:DatIn_SnpRespData;
   } else if (type == CHIDataType:SnpRespData_I_Fwded_SC) {
     return Event:DatIn_SnpRespData;
+  } else if (type == CHIDataType:WrReqDataS) {
+    return Event:DatIn_WrReqData;
+  } else if (type == CHIDataType:WrReqDataL) {
+    return Event:DatIn_WrReqData;
   } else {
     error("Invalid CHIDataType for C2CG dataToEvent");
   }
@@ -276,7 +352,7 @@ bool isWriteRequest(CHIRequestType type) {
 // Determine if a request type is dataless
 bool isDatalessRequest(CHIRequestType type) {
   if ((type == CHIRequestType:CleanUnique) ||
-      (type == CHIRequestType:Evict)) {
+      isEvictLikeRequest(type)) {
     return true;
   }
   return false;
@@ -289,4 +365,68 @@ bool isAtomicRequest(CHIRequestType type) {
     return true;
   }
   return false;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// DVM helper functions (Phase 4)
+////////////////////////////////////////////////////////////////////////////
+
+bool isDvmP1(CHIRequestType type) {
+  if ((type == CHIRequestType:SnpDvmOpSync_P1) ||
+      (type == CHIRequestType:SnpDvmOpNonSync_P1)) {
+    return true;
+  }
+  return false;
+}
+
+bool isDvmP2(CHIRequestType type) {
+  if ((type == CHIRequestType:SnpDvmOpSync_P2) ||
+      (type == CHIRequestType:SnpDvmOpNonSync_P2)) {
+    return true;
+  }
+  return false;
+}
+
+bool isDvmSnoop(CHIRequestType type) {
+  return isDvmP1(type) || isDvmP2(type);
+}
+
+bool isDvmSyncType(CHIRequestType type) {
+  if ((type == CHIRequestType:SnpDvmOpSync_P1) ||
+      (type == CHIRequestType:SnpDvmOpSync_P2) ||
+      (type == CHIRequestType:DvmOpSync)) {
+    return true;
+  }
+  return false;
+}
+
+bool isDvmRequest(CHIRequestType type) {
+  if ((type == CHIRequestType:DvmOpNonSync) ||
+      (type == CHIRequestType:DvmOpSync)) {
+    return true;
+  }
+  return false;
+}
+
+// Shared TBE field initialization (avoids triplicated defaults)
+void clearTBEDefaults(TBE tbe) {
+  tbe.isRead := false;
+  tbe.isWrite := false;
+  tbe.isSnoop := false;
+  tbe.isDVM := false;
+  tbe.isDataless := false;
+  tbe.isAtomic := false;
+  tbe.retryPending := false;
+  tbe.expectingData := false;
+  tbe.expectingComp := false;
+  tbe.resPlane := 0;
+  tbe.usedSharedCredit := false;
+  tbe.rxtxBytes := 0;
+  tbe.pendingSnpResps := 0;
+  tbe.compAckDone := false;
+}
+
+// Check if all data flits for a cache line have been forwarded
+bool allDataFlitsForwarded(TBE tbe) {
+  return tbe.rxtxBytes >= blockSize;
 }
