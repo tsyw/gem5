@@ -56,7 +56,7 @@ class CHI_C2CController(CHI_CHI_C2C_Controller):
         self.transitions_per_cycle = 1024
         self.addr_ranges = addr_ranges
         self.number_of_TBEs = 32
-        self.number_of_snoop_TBEs = 16
+        self.number_of_snoop_TBEs = 64
         self.number_of_dvm_TBEs = 4
 
         # Feature support (Phase 5: interface management)
@@ -97,6 +97,8 @@ class CHI_C2CG(CHI_Node):
         self._cntrl.c2cRxSnp = MessageBuffer()
         self._cntrl.c2cRxRsp = MessageBuffer()
         self._cntrl.c2cRxDat = MessageBuffer()
+        self._cntrl.c2cTxMisc = MessageBuffer()
+        self._cntrl.c2cRxMisc = MessageBuffer()
 
     def getAllControllers(self):
         return [self._cntrl]
@@ -105,20 +107,66 @@ class CHI_C2CG(CHI_Node):
         return [self._cntrl]
 
 
-def wireC2CLink(c2cg_a, c2cg_b):
+def wireC2CLink(
+    c2cg_a, c2cg_b, ruby_system=None, container_latency=1, txq_size=0
+):
     """
-    Wire two C2CG nodes' TX/RX MessageBuffers together.
+    Wire two C2CG nodes via C2CPacketizerBridge instances.
 
-    In Phase 1, this is a simple pass-through: the TX buffer of one
-    C2CG is the RX buffer of the other.
+    Creates two unidirectional bridges (A→B and B→A), each modeling
+    Format X container bandwidth (12 granules per container per cycle).
+
+    If ruby_system is None, falls back to direct MessageBuffer wiring
+    (legacy mode, useful for unit tests that don't need packetization).
+
+    Args:
+        container_latency: Per-container delivery latency in cycles.
+            Compute from bandwidth as ceil(256 / link_bw_gbps) at 1GHz.
+        txq_size: Max buffered granules in bridge TX queues (0 = unlimited).
+            Use 128 or 256 to model TXQ backpressure per the paper.
+
+    Returns (bridge_a2b, bridge_b2a) when bridges are created, or
+    None when using legacy mode.  Caller must attach returned bridges
+    to the SimObject hierarchy (e.g., system.c2c_bridge_a2b = ...).
     """
     ca = c2cg_a.getAllControllers()[0]
     cb = c2cg_b.getAllControllers()[0]
 
-    for ch in ["Req", "Snp", "Rsp", "Dat"]:
-        buf_a2b = MessageBuffer()
-        buf_b2a = MessageBuffer()
-        setattr(ca, f"c2cTx{ch}", buf_a2b)
-        setattr(cb, f"c2cRx{ch}", buf_a2b)
-        setattr(cb, f"c2cTx{ch}", buf_b2a)
-        setattr(ca, f"c2cRx{ch}", buf_b2a)
+    if ruby_system is None:
+        # Legacy direct wiring (no packetizer)
+        for ch in ["Req", "Snp", "Rsp", "Dat", "Misc"]:
+            buf_a2b = MessageBuffer()
+            buf_b2a = MessageBuffer()
+            setattr(ca, f"c2cTx{ch}", buf_a2b)
+            setattr(cb, f"c2cRx{ch}", buf_a2b)
+            setattr(cb, f"c2cTx{ch}", buf_b2a)
+            setattr(ca, f"c2cRx{ch}", buf_b2a)
+        return None
+
+    # Create separate TX/RX buffers per direction per channel
+    for ch in ["Req", "Snp", "Rsp", "Dat", "Misc"]:
+        setattr(ca, f"c2cTx{ch}", MessageBuffer())
+        setattr(cb, f"c2cRx{ch}", MessageBuffer())
+        setattr(cb, f"c2cTx{ch}", MessageBuffer())
+        setattr(ca, f"c2cRx{ch}", MessageBuffer())
+
+    def _make_bridge(tx_cntrl, rx_cntrl):
+        return C2CPacketizerBridge(
+            txReq=tx_cntrl.c2cTxReq,
+            txSnp=tx_cntrl.c2cTxSnp,
+            txRsp=tx_cntrl.c2cTxRsp,
+            txDat=tx_cntrl.c2cTxDat,
+            txMisc=tx_cntrl.c2cTxMisc,
+            rxReq=rx_cntrl.c2cRxReq,
+            rxSnp=rx_cntrl.c2cRxSnp,
+            rxRsp=rx_cntrl.c2cRxRsp,
+            rxDat=rx_cntrl.c2cRxDat,
+            rxMisc=rx_cntrl.c2cRxMisc,
+            container_latency=container_latency,
+            txq_size=txq_size,
+            ruby_system=ruby_system,
+            tx_controller=tx_cntrl,
+            rx_controller=rx_cntrl,
+        )
+
+    return (_make_bridge(ca, cb), _make_bridge(cb, ca))

@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <unordered_map>
 
 #include "base/logging.hh"
 #include "base/statistics.hh"
@@ -50,9 +51,9 @@ namespace ruby
  *   - DAT: dat0 (non-WritePush) + shared pool
  *   - RSP, SNP: single pool each
  *
- * Phase 3: single RP (RP=0), no WritePush, instant credit return.
- * Return credits are replenished directly (no ProtHdr piggybacking
- * until Phase 7 packetization is implemented).
+ * Credit returns are deferred into per-class pending accumulators
+ * and drained by the packetizer bridge into outbound container
+ * ProtHdr fields (4-bit per class, max 15 per container).
  */
 class C2CCreditManager
 {
@@ -65,12 +66,14 @@ class C2CCreditManager
     static constexpr int NUM_CLS = 4;
 
     static constexpr int MAX_RP = 8;
+    static constexpr int MAX_CREDIT_PER_CONTAINER = 15;
 
     C2CCreditManager(statistics::Group *parent, int num_rp,
                      int init_req_per_rp, int init_req_shared, int init_rsp,
                      int init_snp, int init_dat0, int init_dat_shared,
                      int /* init_misc -- reserved for Phase 5 */)
-        : m_reqSh(init_req_shared),
+        : m_registryKey(parent),
+          m_reqSh(init_req_shared),
           m_rsp(init_rsp),
           m_snp(init_snp),
           m_dat0(init_dat0),
@@ -81,6 +84,22 @@ class C2CCreditManager
         for (int i = 0; i < MAX_RP; i++) {
             m_reqRP[i] = (i < num_rp) ? init_req_per_rp : 0;
         }
+        // Register this instance so the bridge can find it
+        s_registry[parent] = this;
+    }
+
+    ~C2CCreditManager() { s_registry.erase(m_registryKey); }
+
+    /**
+     * Look up the C2CCreditManager associated with a controller.
+     * The controller passes itself as the stats::Group parent during
+     * construction; we use that same pointer as the lookup key.
+     */
+    static C2CCreditManager *
+    lookup(statistics::Group *controller)
+    {
+        auto it = s_registry.find(controller);
+        return (it != s_registry.end()) ? it->second : nullptr;
     }
 
     // --- Credit availability queries (called from SLICC) ---
@@ -184,46 +203,82 @@ class C2CCreditManager
     }
 
     // --- Credit return (called from SLICC on inbound dequeue) ---
-    // Phase 3: credits are returned directly to the available pool
-    // (instant return). Phase 7 will defer returns to ProtHdr
-    // piggybacking via m_returnPending + drainReturnPending().
+    // Credits are deferred into m_returnPending and drained by the
+    // packetizer bridge into outbound container ProtHdr fields.
 
     void
     returnReqCredit()
     {
-        // Return to RP0 dedicated pool (Phase 3: single RP)
-        m_reqRP[0]++;
+        m_returnPending[CLS_REQ]++;
         m_stats.reqCreditsReturned++;
     }
 
     void
     returnRspCredit()
     {
-        m_rsp++;
+        m_returnPending[CLS_RSP]++;
         m_stats.rspCreditsReturned++;
     }
 
     void
     returnSnpCredit()
     {
-        m_snp++;
+        m_returnPending[CLS_SNP]++;
         m_stats.snpCreditsReturned++;
     }
 
     void
     returnDatCredit()
     {
-        m_dat0++;
+        m_returnPending[CLS_DAT]++;
         m_stats.datCreditsReturned++;
+    }
+
+    /**
+     * Drain pending credit returns for one container.
+     * Values are clamped to MAX_CREDIT_PER_CONTAINER (4-bit ProtHdr max).
+     */
+    void
+    drainReturnPending(uint8_t &req, uint8_t &rsp, uint8_t &dat, uint8_t &snp)
+    {
+        req = static_cast<uint8_t>(
+            std::min(m_returnPending[CLS_REQ], MAX_CREDIT_PER_CONTAINER));
+        rsp = static_cast<uint8_t>(
+            std::min(m_returnPending[CLS_RSP], MAX_CREDIT_PER_CONTAINER));
+        dat = static_cast<uint8_t>(
+            std::min(m_returnPending[CLS_DAT], MAX_CREDIT_PER_CONTAINER));
+        snp = static_cast<uint8_t>(
+            std::min(m_returnPending[CLS_SNP], MAX_CREDIT_PER_CONTAINER));
+        m_returnPending[CLS_REQ] -= req;
+        m_returnPending[CLS_RSP] -= rsp;
+        m_returnPending[CLS_DAT] -= dat;
+        m_returnPending[CLS_SNP] -= snp;
+    }
+
+    /**
+     * Apply received credit returns from an inbound container's ProtHdr.
+     * REQ credits go to RP0 dedicated pool (single-RP simplification;
+     * multi-RP would need per-RP tracking in the ProtHdr).
+     */
+    void
+    applyReturnCredits(uint8_t req, uint8_t rsp, uint8_t dat, uint8_t snp)
+    {
+        m_reqRP[0] += req;
+        m_rsp += rsp;
+        m_dat0 += dat;
+        m_snp += snp;
     }
 
     void
     recordStall(int cls)
     {
-        m_stats.creditStalls++;
+        assert(cls >= 0 && cls < NUM_CLS);
+        m_stats.creditStallsPerClass[cls]++;
     }
 
   private:
+    statistics::Group *const m_registryKey;
+
     // REQ credits: per-RP dedicated + shared
     int m_reqRP[MAX_RP];
     int m_reqSh;
@@ -235,6 +290,13 @@ class C2CCreditManager
     // DAT credits
     int m_dat0;
     int m_datSh;
+
+    // Deferred credit return accumulators (drained by bridge)
+    int m_returnPending[NUM_CLS] = {};
+
+    // Static registry: controller pointer → credit manager instance
+    static inline std::unordered_map<statistics::Group *, C2CCreditManager *>
+        s_registry;
 
     struct C2CCreditStats : public statistics::Group
     {
@@ -251,9 +313,15 @@ class C2CCreditManager
               ADD_STAT(reqSharedUsed, "REQ shared pool credits used"),
               ADD_STAT(creditUnderflow,
                        "Credit underflow events (bug indicator)"),
-              ADD_STAT(creditStalls,
-                       "Outbound messages stalled on credit exhaustion")
-        {}
+              ADD_STAT(creditStallsPerClass,
+                       "Outbound stalls per message class (REQ/SNP/RSP/DAT)")
+        {
+            creditStallsPerClass.init(NUM_CLS);
+            creditStallsPerClass.subname(CLS_REQ, "REQ");
+            creditStallsPerClass.subname(CLS_SNP, "SNP");
+            creditStallsPerClass.subname(CLS_RSP, "RSP");
+            creditStallsPerClass.subname(CLS_DAT, "DAT");
+        }
 
         statistics::Scalar reqCreditsConsumed;
         statistics::Scalar rspCreditsConsumed;
@@ -265,7 +333,7 @@ class C2CCreditManager
         statistics::Scalar datCreditsReturned;
         statistics::Scalar reqSharedUsed;
         statistics::Scalar creditUnderflow;
-        statistics::Scalar creditStalls;
+        statistics::Vector creditStallsPerClass;
     } m_stats;
 };
 
