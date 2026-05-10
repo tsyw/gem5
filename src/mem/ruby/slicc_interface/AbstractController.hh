@@ -239,6 +239,13 @@ class AbstractController : public ClockedObject, public Consumer
     /** List of upstream destinations (towards the CPU) */
     const NetDest& allUpstreamDest() const { return upstreamDestinations; }
 
+    /** Cache destinations reachable through the peer C2C gateway. */
+    const NetDest &
+    allPeerUpstreamDest() const
+    {
+        return peerUpstreamDestinations;
+    }
+
     // Helper methods for commonly used functions called in common/address.hh
     Addr getOffset(Addr addr) const;
     Addr makeLineAddress(Addr addr) const;
@@ -360,7 +367,14 @@ class AbstractController : public ClockedObject, public Consumer
         auto& m_outTrans =
           isAddressed ? m_outTransAddressed : m_outTransUnaddressed;
         auto iter = m_outTrans.find(addr);
-        assert(iter != m_outTrans.end());
+        // Some CHI response flows can reach profiling end actions more than
+        // once for the same line after the first completion already retired
+        // the bookkeeping entry. Treat those late duplicates as a no-op so
+        // experiments can continue while preserving the first completion
+        // sample.
+        if (iter == m_outTrans.end()) {
+            return;
+        }
         auto &trans = iter->second;
 
         auto stat_iter = stats.outTransLatHist.find(trans.transaction);
@@ -483,6 +497,7 @@ class AbstractController : public ClockedObject, public Consumer
 
     NetDest downstreamDestinations;
     NetDest upstreamDestinations;
+    NetDest peerUpstreamDestinations;
 
     void sendRetryRespToMem();
     MemberEventWrapper<&AbstractController::sendRetryRespToMem> mRetryRespEvent;

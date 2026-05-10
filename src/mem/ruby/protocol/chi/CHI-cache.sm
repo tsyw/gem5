@@ -586,15 +586,6 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     RequestorID requestor,  desc="First requestor to fill this block";
   }
 
-  // Directory entry
-  structure(DirEntry, interface="AbstractCacheEntry", main="false") {
-    NetDest sharers,   desc="All upstream controllers that have this line (includes ownwer)";
-    MachineID owner,   desc="Controller that has the line in UD,UC, or SD state";
-    bool ownerExists, default="false", desc="true if owner exists";
-    bool ownerIsExcl, default="false", desc="true if owner is UD or UC";
-    State state,       desc="SLICC line state";
-  }
-
   // Helper class for tracking expected response and data messages
   structure(ExpectedMap, external ="yes") {
     void clear(int dataChunks);
@@ -613,10 +604,44 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool receivedRespType(CHIResponseType);
   }
 
+  structure(RemoteSharerMap, external ="yes") {
+    void clear();
+    void add(MachineID, MachineID);
+    void addNetDest(NetDest, MachineID);
+    bool contains(MachineID);
+    MachineID lookup(MachineID);
+    void remove(MachineID);
+    void removeNetDest(NetDest);
+    void removeByGateway(MachineID);
+    int countGatewayUsers(MachineID);
+    NetDest remoteSharersIn(NetDest);
+    NetDest gatewaysFor(NetDest);
+    NetDest sharersForGateway(NetDest, MachineID);
+  }
+
+  // Directory entry
+  // dir_sharers holds actual RN MachineIDs (both local and remote).
+  // c2cRemoteSharers is the subset behind C2CGs; c2cGateways caches the
+  // union of proxy C2CGs while c2cSharerGateways preserves the exact
+  // remote-sharer to C2CG mapping needed for targeted snoops.
+  structure(DirEntry, interface="AbstractCacheEntry", main="false") {
+    NetDest sharers,   desc="All upstream controllers that have this line (includes ownwer)";
+    MachineID owner,   desc="Controller that has the line in UD,UC, or SD state";
+    bool ownerExists, default="false", desc="true if owner exists";
+    bool ownerIsExcl, default="false", desc="true if owner is UD or UC";
+    State state,       desc="SLICC line state";
+    // C2C remote sharer tracking
+    NetDest c2cRemoteSharers, desc="Subset of sharers that are behind C2CGs";
+    NetDest c2cGateways,      desc="C2CGs that proxy for c2cRemoteSharers";
+    RemoteSharerMap c2cSharerGateways,
+        desc="Maps each remote sharer to the C2CG that proxies it";
+  }
+
   // Tracks a pending retry
   structure(RetryQueueEntry) {
     Addr addr,           desc="Line address";
     bool usesTxnId,      desc="Uses a transaction ID instead of a memory address";
+    Addr txnId,          desc="Retry transaction ID", default="-1";
     MachineID retryDest, desc="Retry destination";
     uint8_t lpid,        desc="Retry destination";
   }
@@ -660,6 +685,9 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     bool ns,                desc="Secure State of the transaction. NS=NonSecure", default="true";
     MachineID requestor,    desc="Requestor ID";
     MachineID fwdRequestor, desc="Requestor to receive data on fwding snoops";
+    // C2C: remote sharer info from incoming C2CG request (paper Fig.4)
+    bool reqHasRmtDest,     default="false", desc="Request came from C2CG with remote RN";
+    NetDest reqRmtDest,     desc="Actual remote RNs behind the C2CG requestor";
     bool use_DMT,           desc="Use DMT for this transaction";
     bool use_DCT,           desc="Use DCT for this transaction";
 
@@ -703,6 +731,11 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     MachineID dir_owner,          desc="Owner ID";
     bool dir_ownerExists,         desc="Owner ID is valid";
     bool dir_ownerIsExcl,         desc="Owner is UD or UC; SD otherwise";
+    // C2C remote sharer tracking
+    NetDest dir_c2cRemoteSharers, desc="Subset of dir_sharers behind C2CGs";
+    NetDest dir_c2cGateways,      desc="C2CGs that proxy for remote sharers";
+    RemoteSharerMap dir_c2cSharerGateways,
+      desc="Maps each remote sharer to the C2CG that proxies it";
     bool doCacheFill,             desc="Write valid data to the cache when completing transaction";
     // NOTE: dataMaybeDirtyUpstream and dir_ownerExists are the same except
     // when we had just sent dirty data upstream and are waiting for ack to set
@@ -758,6 +791,8 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     Addr pendReqAccAddr;
     int pendReqAccSize;
     NetDest pendReqDest;
+    bool pendReqHasRmtDest;
+    NetDest pendReqRmtDest;
     bool pendReqD2OrigReq;
     bool pendReqRetToSrc;
 

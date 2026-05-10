@@ -409,6 +409,8 @@ void initializeTBE(TBE tbe, Addr addr, int storSlot) {
   tbe.doCacheFill := false;
 
   tbe.pendReqType := CHIRequestType:null;
+  tbe.pendReqHasRmtDest := false;
+  tbe.pendReqRmtDest.clear();
 
   tbe.pendAction := Event:null;
   tbe.finalState := State:null;
@@ -444,6 +446,14 @@ TBE allocateRequestTBE(Addr addr, CHIRequestMsg in_msg), return_by_pointer="yes"
   tbe.accSize := in_msg.accSize;
   tbe.requestor := in_msg.requestor;
   tbe.reqType := in_msg.type;
+
+  // C2C: record remote sharer info from C2CG request (paper Fig.4)
+  if (in_msg.hasRmtDest) {
+    tbe.reqHasRmtDest := true;
+    tbe.reqRmtDest := in_msg.rmtDest;
+  } else {
+    tbe.reqHasRmtDest := false;
+  }
 
   tbe.isSeqReqValid := in_msg.isSeqReqValid;
   tbe.seqReq := in_msg.seqReq;
@@ -672,6 +682,132 @@ void prepareRequest(TBE tbe, CHIRequestType type, CHIRequestMsg & out_msg) {
   assert(tbe.txnId != static_cast(Addr, "value", -1));
 }
 
+// Replace remote sharers in snoop Destination with their C2CG gateways.
+// Sets rmtDest so C2CG knows which remote RNs to actually snoop.
+// Must be called AFTER Destination is populated from dir_sharers.
+void fixupC2CSnpDest(TBE tbe, CHIRequestMsg & out_msg) {
+  NetDest remoteTargets :=
+      tbe.dir_c2cSharerGateways.remoteSharersIn(out_msg.Destination);
+  NetDest gatewayTargets :=
+      tbe.dir_c2cSharerGateways.gatewaysFor(remoteTargets);
+  DPRINTF(RubySlicc, "fixupC2CSnpDest: remoteSharers=%d gateways=%d\n",
+          remoteTargets.count(), gatewayTargets.count());
+  if (remoteTargets.count() > 0) {
+    out_msg.Destination.removeNetDest(remoteTargets);
+    out_msg.Destination.addNetDest(gatewayTargets);
+    out_msg.hasRmtDest := true;
+    out_msg.rmtDest := remoteTargets;
+    DPRINTF(RubySlicc, "fixupC2CSnpDest: set hasRmtDest=true rmtDest=%s Dest=%s\n",
+            out_msg.rmtDest, out_msg.Destination);
+  }
+}
+
+// For single-target snoops: if the target is a remote RN, replace it
+// with its C2CG gateway and set rmtDest to just that one RN.
+void fixupC2CSingleSnpDest(TBE tbe, CHIRequestMsg & out_msg,
+                           MachineID target) {
+  if (tbe.dir_c2cSharerGateways.contains(target)) {
+    out_msg.Destination.remove(target);
+    out_msg.Destination.add(tbe.dir_c2cSharerGateways.lookup(target));
+    out_msg.hasRmtDest := true;
+    out_msg.rmtDest.clear();
+    out_msg.rmtDest.add(target);
+  }
+}
+
+// C2C: add correct entity to dir_sharers. If the request came via C2CG,
+// add the actual remote RN and record the C2CG mapping; else add requestor.
+void addRequestorToSharers(TBE tbe) {
+  if (tbe.reqHasRmtDest) {
+    tbe.dir_sharers.addNetDest(tbe.reqRmtDest);
+    tbe.dir_c2cRemoteSharers.addNetDest(tbe.reqRmtDest);
+    tbe.dir_c2cSharerGateways.addNetDest(tbe.reqRmtDest, tbe.requestor);
+    tbe.dir_c2cGateways.add(tbe.requestor);
+  } else {
+    tbe.dir_sharers.add(tbe.requestor);
+  }
+}
+
+// C2C: set owner to actual remote RN if request came via C2CG.
+MachineID getRequestorForDir(TBE tbe) {
+  if (tbe.reqHasRmtDest) {
+    return tbe.reqRmtDest.smallestElement();
+  } else {
+    return tbe.requestor;
+  }
+}
+
+bool isRequestorInSharers(TBE tbe) {
+  if (tbe.reqHasRmtDest) {
+    return tbe.dir_sharers.isElement(tbe.reqRmtDest.smallestElement());
+  } else {
+    return tbe.dir_sharers.isElement(tbe.requestor);
+  }
+}
+
+void removeRequestorFromSharers(TBE tbe) {
+  if (tbe.reqHasRmtDest) {
+    tbe.dir_sharers.removeNetDest(tbe.reqRmtDest);
+    tbe.dir_c2cRemoteSharers.removeNetDest(tbe.reqRmtDest);
+    tbe.dir_c2cSharerGateways.removeNetDest(tbe.reqRmtDest);
+    // If no more remote sharers through this gateway, remove gateway
+    if (tbe.dir_c2cSharerGateways.countGatewayUsers(tbe.requestor) == 0) {
+      tbe.dir_c2cGateways.remove(tbe.requestor);
+    }
+  } else {
+    tbe.dir_sharers.remove(tbe.requestor);
+  }
+}
+
+// CopyBackWrData forwarded via C2CG arrives with responder set to the
+// gateway. Recover the actual remote RN from the request metadata so HN
+// directory checks stay aligned with the tracked owner/sharer state.
+MachineID getReqDataResponderForDir(TBE tbe, MachineID responder) {
+  if (tbe.dir_c2cGateways.isElement(responder)) {
+    MachineID actualResponder := getRequestorForDir(tbe);
+    assert(tbe.dir_c2cSharerGateways.contains(actualResponder));
+    assert(tbe.dir_c2cSharerGateways.lookup(actualResponder) == responder);
+    return actualResponder;
+  }
+
+  return responder;
+}
+
+// Snoop response data forwarded via C2CG also arrives with responder set to the
+// gateway. Recover the actual remote RN when the directory still tracks a
+// single remote sharer or an owner behind that gateway.
+MachineID getSnpDataResponderForDir(TBE tbe, MachineID responder) {
+  if (tbe.dir_c2cGateways.isElement(responder)) {
+    if (tbe.dir_ownerExists &&
+        tbe.dir_c2cSharerGateways.contains(tbe.dir_owner) &&
+        (tbe.dir_c2cSharerGateways.lookup(tbe.dir_owner) == responder)) {
+      return tbe.dir_owner;
+    }
+
+    NetDest remoteSharers := tbe.dir_c2cSharerGateways.sharersForGateway(
+        tbe.dir_c2cRemoteSharers, responder);
+    if (remoteSharers.count() == 1) {
+      return remoteSharers.smallestElement();
+    }
+  }
+
+  return responder;
+}
+
+void removeDirSharer(TBE tbe, MachineID sharer) {
+  if (tbe.dir_c2cSharerGateways.contains(sharer)) {
+    MachineID gateway := tbe.dir_c2cSharerGateways.lookup(sharer);
+    tbe.dir_sharers.remove(sharer);
+    tbe.dir_c2cRemoteSharers.remove(sharer);
+    tbe.dir_c2cSharerGateways.remove(sharer);
+    if (tbe.dir_c2cSharerGateways.countGatewayUsers(gateway) == 0) {
+      tbe.dir_c2cGateways.remove(gateway);
+    }
+  } else {
+    tbe.dir_sharers.remove(sharer);
+  }
+}
+
 void prepareRequestAtomic(TBE tbe, CHIRequestType type,
                           CHIRequestMsg & out_msg) {
   assert((type == CHIRequestType:AtomicReturn) ||
@@ -689,6 +825,8 @@ void allowRequestRetry(TBE tbe, CHIRequestMsg & out_msg) {
   tbe.pendReqAccAddr := out_msg.accAddr;
   tbe.pendReqAccSize := out_msg.accSize;
   tbe.pendReqDest := out_msg.Destination;
+  tbe.pendReqHasRmtDest := out_msg.hasRmtDest;
+  tbe.pendReqRmtDest := out_msg.rmtDest;
   tbe.pendReqD2OrigReq := out_msg.dataToFwdRequestor;
   tbe.pendReqRetToSrc := out_msg.retToSrc;
 }
@@ -705,6 +843,8 @@ void prepareRequestRetry(TBE tbe, CHIRequestMsg & out_msg) {
   out_msg.accSize := tbe.pendReqAccSize;
   out_msg.type := tbe.pendReqType;
   out_msg.Destination := tbe.pendReqDest;
+  out_msg.hasRmtDest := tbe.pendReqHasRmtDest;
+  out_msg.rmtDest := tbe.pendReqRmtDest;
   out_msg.dataToFwdRequestor := tbe.pendReqD2OrigReq;
   out_msg.retToSrc := tbe.pendReqRetToSrc;
   out_msg.isSeqReqValid := tbe.isSeqReqValid;
@@ -729,6 +869,8 @@ void prepareRequestRetryDVM(TBE tbe, CHIRequestMsg & out_msg) {
   out_msg.accSize := tbe.pendReqAccSize;
   out_msg.type := tbe.pendReqType;
   out_msg.Destination := tbe.pendReqDest;
+  out_msg.hasRmtDest := tbe.pendReqHasRmtDest;
+  out_msg.rmtDest := tbe.pendReqRmtDest;
   out_msg.dataToFwdRequestor := tbe.pendReqD2OrigReq;
   out_msg.retToSrc := tbe.pendReqRetToSrc;
   out_msg.isSeqReqValid := tbe.isSeqReqValid;
@@ -760,6 +902,7 @@ void processRetryQueue() {
     enqueue(retryTriggerOutPort, RetryTriggerMsg, 0) {
       out_msg.addr := e.addr;
       out_msg.usesTxnId := e.usesTxnId;
+      out_msg.txnId := e.txnId;
       out_msg.retryDest := e.retryDest;
       out_msg.event := Event:SendPCrdGrant;
       out_msg.lpid := e.lpid;
@@ -884,10 +1027,16 @@ void copyCacheAndDir(CacheEntry cache_entry, DirEntry dir_entry,
     tbe.dir_owner := dir_entry.owner;
     tbe.dir_ownerExists := dir_entry.ownerExists;
     tbe.dir_ownerIsExcl := dir_entry.ownerIsExcl;
+    tbe.dir_c2cRemoteSharers := dir_entry.c2cRemoteSharers;
+    tbe.dir_c2cGateways := dir_entry.c2cGateways;
+    tbe.dir_c2cSharerGateways := dir_entry.c2cSharerGateways;
     assert(tbe.dir_sharers.count() > 0);
   } else {
     tbe.dir_sharers.clear();
     tbe.dir_ownerExists := false;
+    tbe.dir_c2cRemoteSharers.clear();
+    tbe.dir_c2cGateways.clear();
+    tbe.dir_c2cSharerGateways.clear();
   }
   // Sanity checks
   assert((tbe.dir_ownerExists && tbe.dir_ownerIsExcl) ==
@@ -965,6 +1114,9 @@ void copyCacheAndDirTBEs(TBE src, TBE dst) {
   dst.dir_owner := src.dir_owner;
   dst.dir_ownerExists := src.dir_ownerExists;
   dst.dir_ownerIsExcl := src.dir_ownerIsExcl;
+  dst.dir_c2cRemoteSharers := src.dir_c2cRemoteSharers;
+  dst.dir_c2cGateways := src.dir_c2cGateways;
+  dst.dir_c2cSharerGateways := src.dir_c2cSharerGateways;
   printTBEState(dst);
 }
 

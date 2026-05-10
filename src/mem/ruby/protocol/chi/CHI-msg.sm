@@ -59,6 +59,9 @@ enumeration(CHIRequestType, desc="") {
   ReadUnique;
   ReadOnce;
   CleanUnique;
+  CleanShared;
+  CleanInvalid;
+  MakeInvalid;
   MakeReadUnique;
 
   Evict;
@@ -132,6 +135,10 @@ structure(CHIRequestMsg, desc="", interface="Message") {
   MachineID origSrcID,     desc="Original SrcID before C2CG rewrite";
   Addr origTxnId,          default="0", desc="Original TxnID before C2CG rewrite";
   MachineID c2cSrcGateway, desc="C2CG that sent this message";
+  // Remote sharer targeting: set by HN on snoops to C2CGs so the
+  // gateway knows which specific remote caches to snoop.
+  bool hasRmtDest,         default="false", desc="True if rmtDest is valid";
+  NetDest rmtDest,         desc="Remote caches behind C2CG to be snooped";
 
   // No data for functional access
   bool functionalRead(Packet *pkt) { return false; }

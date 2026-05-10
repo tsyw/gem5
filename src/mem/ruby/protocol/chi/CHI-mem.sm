@@ -205,6 +205,9 @@ machine(MachineType:Memory, "Memory controller interface") :
     Addr addr;
     Event event;
     MachineID retryDest;
+    bool usesTxnId;
+    Addr txnId;
+    uint8_t lpid;
 
     bool functionalRead(Packet *pkt) { return false; }
     bool functionalRead(Packet *pkt, WriteMask &mask) { return false; }
@@ -215,12 +218,15 @@ machine(MachineType:Memory, "Memory controller interface") :
   structure(RetryQueueEntry) {
     Addr addr,           desc="Line address";
     MachineID retryDest, desc="Retry destination";
+    bool usesTxnId,      desc="Request carried a valid txnId";
+    Addr txnId,          desc="Original request txnId";
+    uint8_t lpid,        desc="Request LPID";
   }
 
   structure(TriggerQueue, external ="yes") {
     void pop();
     bool empty();
-    void emplace(Addr,MachineID);
+    void emplace(Addr,MachineID,bool,Addr,uint8_t);
     RetryQueueEntry next();
   }
 
@@ -464,7 +470,12 @@ machine(MachineType:Memory, "Memory controller interface") :
           out_msg.addr := in_msg.addr;
           out_msg.event := Event:Trigger_SendRetry;
           out_msg.retryDest := in_msg.requestor;
-          retryQueue.emplace(in_msg.addr,in_msg.requestor);
+          out_msg.usesTxnId := in_msg.usesTxnId;
+          out_msg.txnId := in_msg.txnId;
+          out_msg.lpid := in_msg.lpid;
+          retryQueue.emplace(in_msg.addr, in_msg.requestor,
+                             in_msg.usesTxnId, in_msg.txnId,
+                             in_msg.lpid);
         }
       }
     }
@@ -529,6 +540,9 @@ machine(MachineType:Memory, "Memory controller interface") :
         out_msg.addr := e.addr;
         out_msg.retryDest := e.retryDest;
         out_msg.event := Event:Trigger_SendPCrdGrant;
+        out_msg.usesTxnId := e.usesTxnId;
+        out_msg.txnId := e.txnId;
+        out_msg.lpid := e.lpid;
       }
     }
   }
@@ -686,9 +700,12 @@ machine(MachineType:Memory, "Memory controller interface") :
     peek(triggerInPort, TriggerMsg) {
       enqueue(rspOutPort, CHIResponseMsg, response_latency) {
         out_msg.addr := in_msg.addr;
+        out_msg.usesTxnId := in_msg.usesTxnId;
         out_msg.type := CHIResponseType:RetryAck;
         out_msg.responder := machineID;
         out_msg.Destination.add(in_msg.retryDest);
+        out_msg.txnId := in_msg.txnId;
+        out_msg.lpid := in_msg.lpid;
       }
     }
   }
@@ -697,9 +714,12 @@ machine(MachineType:Memory, "Memory controller interface") :
     peek(triggerInPort, TriggerMsg) {
       enqueue(rspOutPort, CHIResponseMsg, response_latency) {
         out_msg.addr := in_msg.addr;
+        out_msg.usesTxnId := in_msg.usesTxnId;
         out_msg.type := CHIResponseType:PCrdGrant;
         out_msg.responder := machineID;
         out_msg.Destination.add(in_msg.retryDest);
+        out_msg.txnId := in_msg.txnId;
+        out_msg.lpid := in_msg.lpid;
       }
     }
   }

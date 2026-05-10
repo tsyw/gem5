@@ -88,6 +88,15 @@ class RubyController(ClockedObject):
     upstream_destinations = VectorParam.RubyController(
         [], "Possible destinations for requests sent towards the CPU"
     )
+    upstream_cache_destinations = VectorParam.Int(
+        [],
+        "Additional Cache controller node ids treated as upstream "
+        "destinations without introducing SimObject reference cycles",
+    )
+    peer_upstream_cache_destinations = VectorParam.Int(
+        [],
+        "Cache controller node ids reachable through the peer C2C gateway",
+    )
     downstream_destinations = VectorParam.RubyController(
         [], "Possible destinations for requests sent towards memory"
     )
