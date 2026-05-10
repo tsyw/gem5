@@ -47,9 +47,6 @@ action(AllocateTBE_Request, desc="") {
 
     // Move request to rdy queue
     peek(reqInPort, CHIRequestMsg) {
-            DPRINTF(RubySlicc,
-              "AllocateTBE_Request addr=%#x requestor=%s allowRetry=%d\n",
-              in_msg.addr, in_msg.requestor, in_msg.allowRetry);
       enqueue(reqRdyOutPort, CHIRequestMsg, allocation_latency) {
         assert(in_msg.addr == address);
         assert(in_msg.is_local_pf == false);
@@ -432,10 +429,6 @@ action(StallRequest, desc="") {
   // was stalled because of an existing request
   assert(is_valid(tbe));
   assert(tbe.addr == address);
-  DPRINTF(RubySlicc,
-          "StallRequest addr=%#x state=%s wake_req=%d is_req=%d is_snp=%d is_repl=%d\n",
-          address, tbe.state, tbe.wakeup_pending_req,
-          tbe.is_req_tbe, tbe.is_snp_tbe, tbe.is_repl_tbe);
   // tracks pending
   tbe.wakeup_pending_req := true;
   stall_and_wait(reqRdyPort, address);
@@ -1866,13 +1859,6 @@ action(Send_SnpCleanInvalid, desc="") {
     prepareRequest(tbe, CHIRequestType:SnpCleanInvalid, out_msg);
     out_msg.Destination.addNetDest(tbe.dir_sharers);
     fixupC2CSnpDest(tbe, out_msg);
-    if (tbe.addr == intToAddress(1112064)) {
-      DPRINTF(RubySlicc,
-              "Send_SnpCleanInvalid addr=%#x dir_sharers=%s reqHasRmtDest=%d reqRmtDest=%s Dest=%s hasRmtDest=%d rmtDest=%s\n",
-              tbe.addr, tbe.dir_sharers, tbe.reqHasRmtDest,
-              tbe.reqRmtDest, out_msg.Destination, out_msg.hasRmtDest,
-              out_msg.rmtDest);
-    }
     out_msg.retToSrc := false;
     out_msg.ns := tbe.ns;
   }
@@ -2305,7 +2291,7 @@ action(Receive_SnpDataResp, desc="") {
       error("Received unexpected message");
     }
     // Copy data to tbe only if we didn't have valid data or the received
-    // data is dirty.
+    // data is dirty
     if ((tbe.dataBlkValid.isFull() == false) ||
         (in_msg.type == CHIDataType:SnpRespData_I_PD) ||
         (in_msg.type == CHIDataType:SnpRespData_SC_PD) ||
@@ -2661,11 +2647,11 @@ action(UpdateDirState_FromReqResp, desc="") {
         assert(tbe.dir_ownerExists == false);
         assert(tbe.requestorToBeExclusiveOwner == false);
         // C2C: owner is actual remote RN, not the C2CG proxy
-        MachineID newOwner := in_msg.responder;
         if (tbe.reqHasRmtDest) {
-          newOwner := tbe.reqRmtDest.smallestElement();
+          tbe.dir_owner := tbe.reqRmtDest.smallestElement();
+        } else {
+          tbe.dir_owner := in_msg.responder;
         }
-        tbe.dir_owner := newOwner;
         tbe.dir_ownerExists := true;
         tbe.dir_ownerIsExcl := false;
 
@@ -2673,11 +2659,11 @@ action(UpdateDirState_FromReqResp, desc="") {
         assert(tbe.dataMaybeDirtyUpstream);
         assert(tbe.dir_ownerExists == false);
         assert(tbe.dir_sharers.count() == 1);
-        MachineID newOwner := in_msg.responder;
         if (tbe.reqHasRmtDest) {
-          newOwner := tbe.reqRmtDest.smallestElement();
+          tbe.dir_owner := tbe.reqRmtDest.smallestElement();
+        } else {
+          tbe.dir_owner := in_msg.responder;
         }
-        tbe.dir_owner := newOwner;
         tbe.dir_ownerExists := true;
         tbe.dir_ownerIsExcl := true;
       }
@@ -3632,14 +3618,9 @@ action(CheckCacheFill, desc="") {
 action(Finalize_DeallocateRequest, desc="") {
   assert(is_valid(tbe));
   assert(tbe.actions.empty());
-  Addr wake_addr := tbe.addr;
-  bool wake_req := tbe.wakeup_pending_req;
-  bool wake_snp := tbe.wakeup_pending_snp;
-  bool wake_tgr := tbe.wakeup_pending_tgr;
-  DPRINTF(RubySlicc,
-          "Finalize_DeallocateRequest addr=%#x state=%s wake_req=%d wake_snp=%d wake_tgr=%d is_req=%d is_snp=%d is_repl=%d\n",
-          wake_addr, tbe.state, wake_req, wake_snp, wake_tgr,
-          tbe.is_req_tbe, tbe.is_snp_tbe, tbe.is_repl_tbe);
+  wakeupPendingReqs(tbe);
+  wakeupPendingSnps(tbe);
+  wakeupPendingTgrs(tbe);
 
   if (tbe.is_req_tbe) {
     deallocateReqTBE(tbe);
@@ -3655,19 +3636,6 @@ action(Finalize_DeallocateRequest, desc="") {
     }
   }
   unset_tbe();
-
-  if (wake_req) {
-    DPRINTF(RubySlicc,
-            "Finalize_DeallocateRequest wake req addr=%#x\n",
-            wake_addr);
-    wakeup_port(reqRdyPort, wake_addr);
-  }
-  if (wake_snp) {
-    wakeup_port(snpRdyPort, wake_addr);
-  }
-  if (wake_tgr) {
-    wakeup_port(triggerInPort, wake_addr);
-  }
 
   incomingTransactionEnd(address, curTransitionNextState());
 }
