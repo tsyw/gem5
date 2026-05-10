@@ -108,8 +108,8 @@ class C2CPacketizerBridge : public ClockedObject, public Consumer
     std::deque<PendingCredits> pendingCredits;
 
     const Cycles containerLatency;
-    const unsigned txqSize; // 0 = unlimited
-    unsigned bufferedBytes; // total packed bytes currently in msgQueues
+    const unsigned txqSize;    // 0 = unlimited
+    unsigned bufferedBytes;    // total packed bytes currently in msgQueues
     RubySystem *const rubySystem;
 
     C2CCreditManager *txCreditMgr;
