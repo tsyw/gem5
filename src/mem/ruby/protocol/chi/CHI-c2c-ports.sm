@@ -76,9 +76,9 @@ in_port(c2cRxRspInPort, CHIResponseMsg, c2cRxRsp, rank=12,
         }
         if ((tbe.pendingSnpResps == 1) &&
             (tbe.dataBlkValid.isEmpty() || tbe.dataBlkValid.isFull())) {
-          trigger(Event:RspIn_SnpResp, in_msg.addr, tbe);
+          trigger(Event:RspIn_SnpResp_Out, in_msg.addr, tbe);
         } else {
-          trigger(Event:RspIn_SnpResp_More, in_msg.addr, tbe);
+          trigger(Event:RspIn_SnpResp_More_Out, in_msg.addr, tbe);
         }
       } else {
         tbe := TBEs[in_msg.addr];
@@ -93,7 +93,15 @@ in_port(c2cRxRspInPort, CHIResponseMsg, c2cRxRsp, rank=12,
                   tbe.remoteSrcID, tbe.remoteTxnID);
           if (tbe.isOutbound) {
             // Outbound TBE: response from remote (return C2C credits)
-            trigger(respToEventOut(in_msg.type), in_msg.addr, tbe);
+            Event ev := respToEventOut(in_msg.type);
+            if ((tbe.state == State:ACTIVE_WAIT_SEP) &&
+                (ev == Event:RspIn_RespSepData_Out) &&
+                tbe.expectingComp) {
+              trigger(Event:RspIn_SepReadResp_Done_Out,
+                      in_msg.addr, tbe);
+            } else {
+              trigger(ev, in_msg.addr, tbe);
+            }
           } else {
             // Inbound TBE: CompAck from remote RN (return RSP credit)
             trigger(respToEventIn(in_msg.type), in_msg.addr, tbe);
@@ -143,9 +151,9 @@ in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
           ((firstData && (tbe.pendingSnpResps == 1)) ||
            ((firstData == false) && (tbe.pendingSnpResps == 0)));
         if (finalData) {
-          trigger(Event:DatIn_SnpRespData, in_msg.addr, tbe);
+          trigger(Event:DatIn_SnpRespData_Out, in_msg.addr, tbe);
         } else {
-          trigger(Event:DatIn_SnpRespData_More, in_msg.addr, tbe);
+          trigger(Event:DatIn_SnpRespData_More_Out, in_msg.addr, tbe);
         }
       } else {
         // Regular data from C2C: outbound TBE → read response (_Out),
@@ -161,7 +169,23 @@ in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
             if (isWriteDataType(in_msg.type)) {
               trigger(Event:DatIn_WrData_Remote, in_msg.addr, tbe);
             } else {
-              trigger(dataToEventOut(in_msg.type), in_msg.addr, tbe);
+              Event ev := dataToEventOut(in_msg.type);
+              if (tbe.state == State:ACTIVE_WAIT_SEP) {
+                if (tbe.expectingData &&
+                    (ev == Event:DatIn_DataSepResp_Out)) {
+                  trigger(Event:DatIn_SepReadData_Done_Out,
+                          in_msg.addr, tbe);
+                } else if (tbe.expectingComp &&
+                           ((ev == Event:DatIn_CompData_Out) ||
+                            (ev == Event:DatIn_DataSepResp_Out))) {
+                  trigger(Event:DatIn_SepReadData_More_Out,
+                          in_msg.addr, tbe);
+                } else {
+                  trigger(ev, in_msg.addr, tbe);
+                }
+              } else {
+                trigger(ev, in_msg.addr, tbe);
+              }
             }
           } else {
             trigger(dataToEventIn(in_msg.type), in_msg.addr, tbe);
@@ -207,7 +231,21 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
               rspInPort.dequeue(clockEdge());
             }
           } else if (tbe.retryPending) {
-            trigger(Event:PCrdGrantFromHN, in_msg.addr, tbe);
+            if (tbe.retryState == State:REQ_ACTIVE) {
+              trigger(Event:PCrdGrantReqFromHN, in_msg.addr, tbe);
+            } else if (tbe.retryState == State:WR_ACTIVE_DBID) {
+              trigger(Event:PCrdGrantWrFromHN, in_msg.addr, tbe);
+            } else if (tbe.retryState == State:DL_ACTIVE) {
+              trigger(Event:PCrdGrantDlFromHN, in_msg.addr, tbe);
+            } else if (tbe.retryState == State:EV_ACTIVE) {
+              trigger(Event:PCrdGrantEvFromHN, in_msg.addr, tbe);
+            } else if (tbe.retryState == State:ATOMIC_ACTIVE) {
+              trigger(Event:PCrdGrantAtomicFromHN, in_msg.addr, tbe);
+            } else if (tbe.retryState == State:WR_PUSH_FWD_WAIT_DBID) {
+              trigger(Event:PCrdGrantWrPushFromHN, in_msg.addr, tbe);
+            } else {
+              error("rspInPort: unsupported retryState for PCrdGrant");
+            }
           } else if (tbe.retryGrantPending == false) {
             trigger(Event:EarlyPCrdGrantFromHN, in_msg.addr, tbe);
           } else {
@@ -241,9 +279,9 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
         }
         if ((tbe.pendingSnpResps == 1) &&
             (tbe.dataBlkValid.isEmpty() || tbe.dataBlkValid.isFull())) {
-          trigger(Event:RspIn_SnpResp, in_msg.addr, tbe);
+          trigger(Event:RspIn_SnpResp_In, in_msg.addr, tbe);
         } else {
-          trigger(Event:RspIn_SnpResp_More, in_msg.addr, tbe);
+          trigger(Event:RspIn_SnpResp_More_In, in_msg.addr, tbe);
         }
       } else {
         TBE tbe := TBEs[in_msg.addr];
@@ -253,7 +291,15 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
             trigger(respToEventOut(in_msg.type), in_msg.addr, tbe);
           } else {
             // Inbound TBE: Comp/DBIDResp from local HN going to C2C TX
-            trigger(respToEventIn(in_msg.type), in_msg.addr, tbe);
+            Event ev := respToEventIn(in_msg.type);
+            if ((tbe.state == State:ACTIVE_WAIT_SEP) &&
+                (ev == Event:RspIn_RespSepData_In) &&
+                tbe.expectingComp) {
+              trigger(Event:RspIn_SepReadResp_Done_In,
+                      in_msg.addr, tbe);
+            } else {
+              trigger(ev, in_msg.addr, tbe);
+            }
           }
         } else {
           error("rspInPort: no TBE for response message");
@@ -287,9 +333,9 @@ in_port(datInPort, CHIDataMsg, datIn, rank=9,
           ((firstData && (tbe.pendingSnpResps == 1)) ||
            ((firstData == false) && (tbe.pendingSnpResps == 0)));
         if (finalData) {
-          trigger(Event:DatIn_SnpRespData, in_msg.addr, tbe);
+          trigger(Event:DatIn_SnpRespData_In, in_msg.addr, tbe);
         } else {
-          trigger(Event:DatIn_SnpRespData_More, in_msg.addr, tbe);
+          trigger(Event:DatIn_SnpRespData_More_In, in_msg.addr, tbe);
         }
       } else {
         TBE tbe := TBEs[in_msg.addr];
@@ -307,7 +353,34 @@ in_port(datInPort, CHIDataMsg, datIn, rank=9,
             trigger(Event:DatIn_WrData_Local, in_msg.addr, tbe);
           } else {
             // Inbound TBE: read/atomic response data from local HN going to C2C TX
-            trigger(dataToEventIn(in_msg.type), in_msg.addr, tbe);
+            Event ev := dataToEventIn(in_msg.type);
+            if (tbe.state == State:ACTIVE_WAIT_SEP) {
+              if (tbe.expectingData &&
+                  (ev == Event:DatIn_DataSepResp_In)) {
+                trigger(Event:DatIn_SepReadData_Done_In,
+                        in_msg.addr, tbe);
+              } else if (tbe.expectingComp &&
+                         ((ev == Event:DatIn_CompData_In) ||
+                          (ev == Event:DatIn_DataSepResp_In))) {
+                trigger(Event:DatIn_SepReadData_More_In,
+                        in_msg.addr, tbe);
+              } else {
+                trigger(ev, in_msg.addr, tbe);
+              }
+            } else if ((tbe.state == State:RETRY_WAIT) &&
+                       (ev == Event:DatIn_CompData_In)) {
+              if (tbe.retryState == State:REQ_ACTIVE) {
+                trigger(Event:DatIn_CompData_RetryReq_In,
+                        in_msg.addr, tbe);
+              } else if (tbe.retryState == State:ATOMIC_ACTIVE) {
+                trigger(Event:DatIn_CompData_RetryAtomic_In,
+                        in_msg.addr, tbe);
+              } else {
+                trigger(ev, in_msg.addr, tbe);
+              }
+            } else {
+              trigger(ev, in_msg.addr, tbe);
+            }
           }
         } else {
           error("datInPort: no TBE for data message");

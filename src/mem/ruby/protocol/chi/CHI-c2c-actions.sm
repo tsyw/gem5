@@ -511,6 +511,24 @@ action(forwardLocalRspToC2C, "fwdLRspC2C", desc="Forward local response to C2C")
   }
 }
 
+action(sendCompToC2C, "sndCompC2C",
+  desc="Send only Comp semantics to peer C2C gateway for WritePush completion") {
+  assert(is_valid(tbe));
+  peek(rspInPort, CHIResponseMsg) {
+    enqueue(c2cTxRspOutPort, CHIResponseMsg, response_latency) {
+      out_msg := in_msg;
+      out_msg.type := CHIResponseType:Comp;
+      out_msg.responder := machineID;
+      out_msg.txnId := tbe.remoteTxnID;
+      out_msg.usesTxnId := true;
+      out_msg.isC2C := true;
+      out_msg.c2cSrcGateway := machineID;
+      out_msg.Destination.clear();
+      out_msg.Destination.add(machineID);  // bridge handles delivery
+    }
+  }
+}
+
 action(forwardLocalDatToC2C, "fwdLDatC2C", desc="Forward local data to C2C") {
   assert(is_valid(tbe));
   peek(datInPort, CHIDataMsg) {
@@ -634,10 +652,24 @@ action(recordPCrdGrant, "rpcg",
   tbe.retryGrantPending := true;
 }
 
+action(saveRetryState, "srst",
+  desc="Remember current state as retry resume state") {
+  assert(is_valid(tbe));
+  tbe.retryState := tbe.state;
+}
+
+action(resumeRetryState, "rrst",
+       desc="Restore retry resume state before reissue") {
+  assert(is_valid(tbe));
+  assert(tbe.retryState != State:I);
+  setState(tbe, address, tbe.retryState);
+}
+
 action(reissueRequest, "reis", desc="Re-issue request after PCrdGrant") {
   assert(is_valid(tbe));
   tbe.retryPending := false;
   tbe.retryGrantPending := false;
+  tbe.retryState := State:I;
   enqueue(reqOutPort, CHIRequestMsg, request_latency) {
     out_msg.addr := tbe.addr;
     out_msg.type := tbe.reqType;
@@ -680,9 +712,30 @@ action(clearExpectingData, "ceD", desc="Clear expecting data flag") {
   tbe.expectingData := false;
 }
 
+action(setExpectingComp, "seC", desc="Mark TBE as expecting response") {
+  assert(is_valid(tbe));
+  tbe.expectingComp := true;
+}
+
+action(clearExpectingComp, "ceC", desc="Clear expecting response flag") {
+  assert(is_valid(tbe));
+  tbe.expectingComp := false;
+}
+
+action(recordWriteComp, "rwc", desc="Record that write Comp has arrived") {
+  assert(is_valid(tbe));
+  tbe.writeCompReceived := true;
+}
+
 action(trackDatFlit, "tdf", desc="Track data flit bytes forwarded") {
   assert(is_valid(tbe));
   tbe.rxtxBytes := tbe.rxtxBytes + data_channel_size;
+}
+
+action(markWriteDataForwarded, "mwdf",
+       desc="Mark buffered write data as fully forwarded") {
+  assert(is_valid(tbe));
+  tbe.rxtxBytes := blockSize;
 }
 
 action(checkTxnComplete, "ctc",
@@ -712,6 +765,18 @@ action(checkWriteBackTxnComplete, "cwbtc",
   assert(is_valid(tbe));
   if ((tbe.reqType == CHIRequestType:WriteBackFull) &&
       allDataFlitsForwarded(tbe)) {
+    enqueue(triggerOutPort, TriggerMsg, 0) {
+      out_msg.addr := address;
+      out_msg.event := Event:CompleteTxn;
+    }
+  }
+}
+
+action(checkWriteTxnComplete, "cwtc",
+       desc="Complete write when required data and Comp have both arrived") {
+  assert(is_valid(tbe));
+  if (allDataFlitsForwarded(tbe) &&
+      (tbe.writeCompReceived || !writeCompRequired(tbe.reqType))) {
     enqueue(triggerOutPort, TriggerMsg, 0) {
       out_msg.addr := address;
       out_msg.event := Event:CompleteTxn;

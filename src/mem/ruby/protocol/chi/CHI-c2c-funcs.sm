@@ -237,25 +237,25 @@ Event respToEvent(CHIResponseType type) {
   } else if (type == CHIResponseType:PCrdGrant) {
     return Event:PCrdGrantFromHN;
   } else if (type == CHIResponseType:SnpResp_I) {
-    return Event:RspIn_SnpResp;
+    return Event:RspIn_SnpResp_Out;
   } else if (type == CHIResponseType:SnpResp_SC) {
-    return Event:RspIn_SnpResp;
+    return Event:RspIn_SnpResp_Out;
   } else if (type == CHIResponseType:SnpResp_I_Fwded_UC) {
-    return Event:RspIn_SnpResp;
+    return Event:RspIn_SnpResp_Out;
   } else if (type == CHIResponseType:SnpResp_I_Fwded_UD_PD) {
-    return Event:RspIn_SnpResp;
+    return Event:RspIn_SnpResp_Out;
   } else if (type == CHIResponseType:SnpResp_SC_Fwded_SC) {
-    return Event:RspIn_SnpResp;
+    return Event:RspIn_SnpResp_Out;
   } else if (type == CHIResponseType:SnpResp_SC_Fwded_SD_PD) {
-    return Event:RspIn_SnpResp;
+    return Event:RspIn_SnpResp_Out;
   } else if (type == CHIResponseType:SnpResp_UC_Fwded_I) {
-    return Event:RspIn_SnpResp;
+    return Event:RspIn_SnpResp_Out;
   } else if (type == CHIResponseType:SnpResp_UD_Fwded_I) {
-    return Event:RspIn_SnpResp;
+    return Event:RspIn_SnpResp_Out;
   } else if (type == CHIResponseType:SnpResp_SC_Fwded_I) {
-    return Event:RspIn_SnpResp;
+    return Event:RspIn_SnpResp_Out;
   } else if (type == CHIResponseType:SnpResp_SD_Fwded_I) {
-    return Event:RspIn_SnpResp;
+    return Event:RspIn_SnpResp_Out;
   } else {
     error("Invalid CHIResponseType for C2CG respToEvent");
   }
@@ -267,33 +267,33 @@ Event respToEvent(CHIResponseType type) {
 // use dataToEventOut() / dataToEventIn() based on tbe.isOutbound.
 Event dataToEvent(CHIDataType type) {
   if (type == CHIDataType:SnpRespData_I) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_I_PD) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_SC) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_SC_PD) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_SD) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_UC) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_UD) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_SC_Fwded_SC) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_SC_Fwded_SD_PD) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_SC_PD_Fwded_SC) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_SD_Fwded_SC) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_I_Fwded_SD_PD) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_I_PD_Fwded_SC) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:SnpRespData_I_Fwded_SC) {
-    return Event:DatIn_SnpRespData;
+    return Event:DatIn_SnpRespData_Out;
   } else if (type == CHIDataType:WrReqDataS) {
     return Event:DatIn_WrReqData;
   } else if (type == CHIDataType:WrReqDataL) {
@@ -342,6 +342,10 @@ bool isWriteRequest(CHIRequestType type) {
     return true;
   }
   return false;
+}
+
+bool writeCompRequired(CHIRequestType type) {
+  return type != CHIRequestType:WriteBackFull;
 }
 
 // Determine if a request type is dataless
@@ -415,6 +419,8 @@ void clearTBEDefaults(TBE tbe) {
   tbe.txnID := intToAddress(0);
   tbe.retryPending := false;
   tbe.retryGrantPending := false;
+  tbe.retryState := State:I;
+  tbe.writeCompReceived := false;
   tbe.expectingData := false;
   tbe.expectingComp := false;
   tbe.resPlane := 0;

@@ -153,13 +153,11 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     // Merged bidirectional states (HR-4: outbound+inbound share state,
     // direction tracked via tbe.isOutbound + _Out/_In event split)
     REQ_ACTIVE,        AccessPermission:Busy,
-        desc="Request active (outbound fwd'd to C2C, inbound fwd'd to HN)";
-    ACTIVE_WAIT_DAT,   AccessPermission:Busy,
-        desc="RespSepData rcvd, waiting for DataSepResp (either direction)";
-    ACTIVE_WAIT_COMP,  AccessPermission:Busy,
-        desc="DataSepResp fwd'd, waiting for RespSepData (either direction)";
+      desc="Request active (outbound fwd'd to C2C, inbound fwd'd to HN)";
+    ACTIVE_WAIT_SEP,   AccessPermission:Busy,
+      desc="Separated read partially received, waiting for remaining half";
     WR_ACTIVE_DBID,    AccessPermission:Busy,
-        desc="Write active, waiting for DBIDResp (either direction)";
+        desc="Write request sent, waiting for DBIDResp and/or Comp";
     COMPACK_ACTIVE,    AccessPermission:Busy,
         desc="Waiting for CompAck (outbound from local RN, inbound from remote)";
     DL_ACTIVE,         AccessPermission:Busy,
@@ -169,46 +167,20 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     ATOMIC_ACTIVE,     AccessPermission:Busy,
         desc="Atomic active, waiting for response (either direction)";
 
-    // Evict-write-specific state (merged inbound/outbound; unlike normal
-    // writes, evict/clean writes can complete on Comp or on DBIDResp+data)
-    EVWR_WAIT_DBID,    AccessPermission:Busy,
-        desc="Evict/clean write waiting for DBIDResp or direct Comp";
-
-    // Write completion wait states (not merged: semantically different)
-    //   EVWR_WAIT_DATA: outbound evict/clean write waiting only for local data
-    //   EVWR_FWD_WAIT_DATA: inbound evict/clean write waiting only for remote data
-    //   WR_WAIT_COMP: outbound write sent data, awaiting Comp from remote HN
-    //   WR_FWD_WAIT_DATA: inbound write DBIDResp forwarded, awaiting data from remote
-    EVWR_WAIT_DATA,    AccessPermission:Busy,
-        desc="Outbound evict/clean write: DBIDResp fwd'd, waiting for write data";
-    EVWR_FWD_WAIT_DATA, AccessPermission:Busy,
-        desc="Inbound evict/clean write: DBIDResp fwd'd to C2C, waiting for write data";
+    // Unified post-DBID write state. DBIDResp and Comp are unordered, so
+    // this state may still be waiting for data, Comp, or both.
     WR_WAIT_COMP,      AccessPermission:Busy,
-        desc="Outbound write: data forwarded to C2C, waiting for Comp";
-    WR_FWD_WAIT_DATA,  AccessPermission:Busy,
-        desc="Inbound write: DBIDResp fwd'd to C2C, waiting for write data";
+      desc="Write DBID seen, waiting for remaining data and/or Comp";
 
-    // Retry-wait states for inbound flows
-    REQ_RETRY_WAIT,    AccessPermission:Busy,
-        desc="Inbound read retry waiting for PCrdGrant";
-    WR_RETRY_WAIT,     AccessPermission:Busy,
-        desc="Inbound write retry waiting for PCrdGrant";
-    EVWR_RETRY_WAIT,   AccessPermission:Busy,
-        desc="Inbound evict/clean write retry waiting for PCrdGrant";
-    DL_RETRY_WAIT,     AccessPermission:Busy,
-        desc="Inbound dataless retry waiting for PCrdGrant";
-    EV_RETRY_WAIT,     AccessPermission:Busy,
-        desc="Inbound Evict retry waiting for PCrdGrant";
-    ATOMIC_RETRY_WAIT, AccessPermission:Busy,
-        desc="Inbound atomic retry waiting for PCrdGrant";
-    WR_PUSH_RETRY_WAIT, AccessPermission:Busy,
-        desc="WritePush rcv retry waiting for PCrdGrant";
+    // Unified retry-wait state for inbound flows. The original state to
+    // resume is carried in tbe.retryState because RetryAck and PCrdGrant can
+    // arrive in either order.
+    RETRY_WAIT,        AccessPermission:Busy,
+        desc="Inbound retry waiting for PCrdGrant";
 
     // Snoop path
     SNP_WAIT_RESP,     AccessPermission:Busy,
-        desc="Snoop forwarded across C2C, awaiting response";
-    INB_SNP_WAIT_RESP, AccessPermission:Busy,
-        desc="Inbound snoop delivered locally, awaiting response";
+        desc="Snoop awaiting response/data (either direction)";
 
     // DVM originator path (local MN -> C2CG -> remote MN)
     DVM_WAIT_P2,       AccessPermission:Busy,
@@ -226,9 +198,9 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
     // WritePush receiver path (peer splits WrReqData)
     WR_PUSH_FWD_WAIT_DBID, AccessPermission:Busy,
-        desc="WritePush rcv: REQ sent to HN, waiting for DBID";
+      desc="WritePush rcv: waiting for die-local DBID and/or Comp; C2C only sees Comp";
     WR_PUSH_FWD_WAIT_COMP, AccessPermission:Busy,
-        desc="WritePush rcv: data sent to HN, waiting for Comp";
+      desc="WritePush rcv: data sent to HN, waiting for any remaining die-local Comp";
   }
 
 
@@ -282,8 +254,10 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     RspIn_CompAck,               desc="CompAck received (legacy)";
     RspIn_ReadReceipt,           desc="ReadReceipt received (legacy)";
     RspIn_RespSepData,           desc="RespSepData (split comp) received (legacy)";
-    RspIn_SnpResp,               desc="Final snoop response (no data)";
-    RspIn_SnpResp_More,          desc="Non-final snoop response (no data)";
+    RspIn_SnpResp_Out,           desc="Final snoop response from C2C RX";
+    RspIn_SnpResp_More_Out,      desc="Non-final snoop response from C2C RX";
+    RspIn_SnpResp_In,            desc="Final snoop response from local NoC";
+    RspIn_SnpResp_More_In,       desc="Non-final snoop response from local NoC";
 
     // Response events — directional (_Out = C2C RX or outbound context,
     //                               _In  = NoC RSP or inbound context)
@@ -298,17 +272,28 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     RspIn_ReadReceipt_Out,       desc="ReadReceipt from C2C RX (outbound only)";
     RspIn_RespSepData_Out,       desc="RespSepData from C2C RX (outbound)";
     RspIn_RespSepData_In,        desc="RespSepData from local HN (inbound)";
+    RspIn_SepReadResp_Done_Out,  desc="RespSepData completes separated outbound read";
+    RspIn_SepReadResp_Done_In,   desc="RespSepData completes separated inbound read";
 
-    // Data events — non-directional (used by snoop path and WrReqData)
-    DatIn_SnpRespData,           desc="Final SnpRespData flit received";
-    DatIn_SnpRespData_More,      desc="Non-final SnpRespData flit received";
+    // Data events — non-directional (used by WrReqData)
     DatIn_WrReqData,             desc="WrReqDataS/L received from C2C";
 
     // Data events — directional
+    DatIn_SnpRespData_Out,       desc="Final SnpRespData from C2C RX";
+    DatIn_SnpRespData_More_Out,  desc="Non-final SnpRespData from C2C RX";
+    DatIn_SnpRespData_In,        desc="Final SnpRespData from local NoC";
+    DatIn_SnpRespData_More_In,   desc="Non-final SnpRespData from local NoC";
     DatIn_CompData_Out,          desc="CompData from C2C RX (outbound read response)";
     DatIn_CompData_In,           desc="CompData from local HN (inbound read response)";
+    DatIn_CompData_RetryReq_In,  desc="CompData from local HN while retrying an inbound read";
+    DatIn_CompData_RetryAtomic_In,
+                   desc="CompData from local HN while retrying an inbound atomic";
     DatIn_DataSepResp_Out,       desc="DataSepResp from C2C RX (outbound)";
     DatIn_DataSepResp_In,        desc="DataSepResp from local HN (inbound)";
+    DatIn_SepReadData_More_Out,  desc="More separated read data from C2C RX before RespSepData";
+    DatIn_SepReadData_More_In,   desc="More separated read data from local HN before RespSepData";
+    DatIn_SepReadData_Done_Out,  desc="DataSepResp completes separated outbound read";
+    DatIn_SepReadData_Done_In,   desc="DataSepResp completes separated inbound read";
     DatIn_WrData_Remote,         desc="Write data from C2C RX for outbound transaction";
     DatIn_WrData_Local,          desc="Write data from local NoC for inbound transaction";
     DatIn_CBWrData_Out,          desc="CBWrData from local RN via NoC (outbound write)";
@@ -319,6 +304,12 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     // Retry handling
     RetryAckFromHN,              desc="RetryAck from local HN (absorb)";
     PCrdGrantFromHN,             desc="PCrdGrant from local HN";
+    PCrdGrantReqFromHN,          desc="PCrdGrant from local HN for a retried inbound read";
+    PCrdGrantWrFromHN,           desc="PCrdGrant from local HN for a retried inbound write";
+    PCrdGrantDlFromHN,           desc="PCrdGrant from local HN for a retried inbound dataless request";
+    PCrdGrantEvFromHN,           desc="PCrdGrant from local HN for a retried inbound evict";
+    PCrdGrantAtomicFromHN,       desc="PCrdGrant from local HN for a retried inbound atomic";
+    PCrdGrantWrPushFromHN,       desc="PCrdGrant from local HN for a retried inbound WritePush receiver";
     EarlyPCrdGrantFromHN,        desc="PCrdGrant from local HN before RetryAck";
     RetryAckWithGrantFromHN,     desc="RetryAck from local HN after PCrdGrant";
     SendRetryAck,                desc="Send RetryAck to requester";
@@ -356,11 +347,13 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     MachineID remoteSrcID,      desc="Remote source MachineID";
     Addr remoteTxnID,           desc="Remote TxnID";
     MachineID peerC2CG,         desc="Peer C2CG on remote chip";
-    bool expectingData,         desc="Waiting for data";
-    bool expectingComp,         desc="Waiting for completion";
+    bool expectingData,         desc="Waiting for separated read data";
+    bool expectingComp,         desc="Waiting for separated read response";
     int pendingSnpResps,        desc="Outstanding snoop responses";
     bool retryPending,          desc="HN sent RetryAck";
     bool retryGrantPending,     desc="HN sent PCrdGrant";
+    State retryState,           desc="State to resume after PCrdGrant";
+    bool writeCompReceived,     desc="Write-side Comp has been observed";
     int resPlane,               desc="Resource Plane assignment";
     bool usedSharedCredit,      desc="Used shared credit pool";
     Tick allocTime,             desc="Cycle when allocated";
