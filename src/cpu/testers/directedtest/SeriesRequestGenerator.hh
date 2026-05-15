@@ -28,12 +28,14 @@
 
 //
 // This Deterministic Generator generates GETX requests for all nodes in the
-// system.  The GETX requests are generated one at a time in round-robin fashion
-// 0...1...2...etc.
+// system.  The GETX requests are generated one at a time in round-robin
+// fashion 0...1...2...etc.
 //
 
 #ifndef __CPU_DIRECTEDTEST_SERIESREQUESTGENERATOR_HH__
 #define __CPU_DIRECTEDTEST_SERIESREQUESTGENERATOR_HH__
+
+#include <vector>
 
 #include "base/random.hh"
 #include "cpu/testers/directedtest/DirectedGenerator.hh"
@@ -54,6 +56,7 @@ class SeriesRequestGenerator : public DirectedGenerator
 
     bool initiate();
     void performCallback(uint32_t proc, Addr address);
+    bool isReadyToIssue() const override;
 
   private:
     ruby::SeriesRequestGeneratorStatus m_status;
@@ -61,6 +64,11 @@ class SeriesRequestGenerator : public DirectedGenerator
     uint32_t m_active_node;
     uint32_t m_addr_increment_size;
     uint32_t m_percent_writes;
+    uint32_t m_issue_window;
+    uint32_t m_outstanding_count;
+    uint32_t m_completed_this_cycle;
+    std::vector<bool> m_pending;
+    std::vector<Addr> m_pending_address;
     Random::RandomPtr rng = Random::genRandom();
 };
 

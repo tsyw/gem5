@@ -50,6 +50,7 @@ class SeriesRequestGenerator(DirectedGenerator):
         1, "number of different address streams to generate"
     )
     percent_writes = Param.Percent(50, "percent of access that are writes")
+    issue_window = Param.UInt32(1, "maximum outstanding requests")
 
 
 class InvalidateGenerator(DirectedGenerator):

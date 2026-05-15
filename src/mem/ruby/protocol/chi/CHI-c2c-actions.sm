@@ -124,12 +124,15 @@ action(checkAllocateTBE_withCredit, desc="TBE alloc after credit granted") {
 action(allocateTBE, "atbe", desc="Allocate TBE for a transaction") {
   storTBEs.decrementReserved();
   assert(storTBEs.areNSlotsAvailable(1));
-  TBEs.allocate(address);
-  set_tbe(TBEs[address]);
-  tbe.storSlot := storTBEs.addEntryToNewSlot();
+  int slot := storTBEs.addEntryToNewSlot();
+  Addr key := tbeSlotKey(slot);
+  TBEs.allocate(key);
+  set_tbe(TBEs[key]);
+  tbe.storSlot := slot;
   tbe.addr := address;
   tbe.allocTime := curTick();
   clearTBEDefaults(tbe);
+  txnKeyTable.bindAddress(address, key);
 }
 
 // Mark TBE as outbound (local→remote). Called after allocateTBE for
@@ -153,8 +156,10 @@ action(deallocateTBE, "dtbe", desc="Deallocate TBE") {
   }
   DPRINTF(RubySlicc, "C2C TBE dealloc addr=%#x lifetime=%llu ticks\n",
           address, txnLifetime);
+  Addr key := tbeKey(tbe);
+  txnKeyTable.eraseKey(key);
   storTBEs.removeEntryFromSlot(tbe.storSlot);
-  TBEs.deallocate(address);
+  TBEs.deallocate(key);
   unset_tbe();
   // Check if a retrying requester is waiting for credit
   if (retryQueue.empty() == false) {
@@ -201,31 +206,65 @@ action(deallocateSnpTBE, "dsnptbe", desc="Deallocate snoop TBE") {
 action(recordLocalIDs_fromReq, "rlid", desc="Record local IDs from request") {
   assert(is_valid(tbe));
   peek(reqRdyInPort, CHIRequestMsg) {
+    Addr key := tbeKey(tbe);
     tbe.reqType := in_msg.type;
     tbe.localSrcID := in_msg.requestor;
     tbe.localFwdRequestor := in_msg.fwdRequestor;
     tbe.localTxnID := in_msg.txnId;
     tbe.remoteSrcID := machineID;
+    txnKeyTable.bindLocal(tbe.localSrcID, tbe.localTxnID, key);
+    txnKeyTable.bindC2COut(intToAddress(tbe.storSlot), key);
     tbe.isRead := isReadRequest(in_msg.type);
     tbe.isWrite := isWriteRequest(in_msg.type);
     tbe.isDataless := isDatalessRequest(in_msg.type);
     tbe.isAtomic := isAtomicRequest(in_msg.type);
+    if (needsRequesterCompAck(in_msg.type)) {
+      tbe.pendingCompAcks := 1;
+    }
+    if (in_msg.type == CHIRequestType:ReadShared) {
+      tbe.readFanoutDests.clear();
+      tbe.readFanoutDests.add(in_msg.requestor);
+    }
+  }
+}
+
+action(attachMergedReadFromReq, "amr",
+       desc="Attach a compatible local ReadShared to an active read") {
+  assert(is_valid(tbe));
+  peek(reqInPort, CHIRequestMsg) {
+    assert(canMergeLocalRead(tbe, in_msg.type, in_msg.requestor));
+    tbe.readFanoutDests.add(in_msg.requestor);
+    tbe.pendingCompAcks := tbe.pendingCompAcks + 1;
+    readMergeAttachCount := readMergeAttachCount + 1;
+    readMergeTable.addSharers(address, tbe.readFanoutDests);
+    DPRINTF(RubySlicc,
+            "C2C merge ReadShared addr=%#x requestor=%s fanout=%d pendingAcks=%d\n",
+            address, in_msg.requestor, tbe.readFanoutDests.count(),
+            tbe.pendingCompAcks);
   }
 }
 
 action(recordRemoteIDs_fromC2CReq, "rrid", desc="Record remote IDs from C2C req") {
   assert(is_valid(tbe));
   peek(c2cRxReqInPort, CHIRequestMsg) {
+    Addr key := tbeKey(tbe);
     tbe.reqType := in_msg.type;
     tbe.remoteSrcID := in_msg.origSrcID;
-    tbe.remoteTxnID := in_msg.origTxnId;
+    tbe.remoteTxnID := in_msg.txnId;
     tbe.localSrcID := machineID;
     assignTxnID(tbe);
+    txnKeyTable.bindC2CIn(tbe.remoteTxnID, key);
+    txnKeyTable.bindLocal(mapAddressToDownstreamMachine(address), tbe.txnID,
+                          key);
+    txnKeyTable.bindLocalTxn(tbe.txnID, key);
     tbe.peerC2CG := in_msg.c2cSrcGateway;
     tbe.isRead := isReadRequest(in_msg.type);
     tbe.isWrite := isWriteRequest(in_msg.type);
     tbe.isDataless := isDatalessRequest(in_msg.type);
     tbe.isAtomic := isAtomicRequest(in_msg.type);
+    if (needsRequesterCompAck(in_msg.type)) {
+      tbe.pendingCompAcks := 1;
+    }
   }
 }
 
@@ -270,13 +309,21 @@ action(recordInboundSnpTargets, "risnp",
        desc="Record expected responses for inbound snoop") {
   assert(is_valid(tbe));
   peek(c2cRxSnpInPort, CHIRequestMsg) {
+    tbe.c2cSnpForwardDests.clear();
     if (in_msg.hasRmtDest) {
       NetDest localTargets := in_msg.rmtDest.AND(allUpstreamDest());
+      tbe.c2cSnpResponsesToForward := localTargets.count();
+      tbe.c2cSnpForwardDests := localTargets;
+      localTargets := readMergeTable.expandSharers(address, localTargets);
       tbe.pendingSnpResps := localTargets.count();
     } else {
       tbe.pendingSnpResps := in_msg.Destination.count();
+      tbe.c2cSnpResponsesToForward := tbe.pendingSnpResps;
+      tbe.c2cSnpForwardDests := in_msg.Destination;
     }
     assert(tbe.pendingSnpResps > 0);
+    assert(tbe.c2cSnpResponsesToForward > 0);
+    assert(tbe.c2cSnpForwardDests.count() > 0);
   }
 }
 
@@ -305,13 +352,17 @@ action(recordSnpRespDataFromLocal, "rsnpdloc",
        desc="Aggregate snoop response data from local NoC") {
   assert(is_valid(tbe));
   peek(datInPort, CHIDataMsg) {
-    if (tbe.dataBlkValid.isEmpty()) {
+    if (tbe.snpDataRespondersSeen.isElement(in_msg.responder) == false) {
       assert(tbe.pendingSnpResps > 0);
       tbe.pendingSnpResps := tbe.pendingSnpResps - 1;
+      tbe.snpDataRespondersSeen.add(in_msg.responder);
     }
-    assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
-    tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
-    tbe.dataBlkValid.orMask(in_msg.bitMask);
+    if ((tbe.c2cSnpForwardDests.count() == 0) ||
+        tbe.c2cSnpForwardDests.isElement(in_msg.responder)) {
+      assert(tbe.dataBlkValid.isOverlap(in_msg.bitMask) == false);
+      tbe.dataBlk.copyPartial(in_msg.dataBlk, in_msg.bitMask);
+      tbe.dataBlkValid.orMask(in_msg.bitMask);
+    }
   }
 }
 
@@ -353,6 +404,26 @@ action(forwardRspToC2CTx, "fwdRspC2C", desc="Forward response to C2C TX RSP") {
       out_msg.c2cSrcGateway := machineID;
       out_msg.Destination.clear();
       out_msg.Destination.add(machineID);  // bridge handles delivery
+    }
+  }
+}
+
+action(forwardFirstCompAckToC2CTx, "fwd1CAckC2C",
+       desc="Forward only the leader CompAck for a merged read") {
+  assert(is_valid(tbe));
+  if (tbe.compAckDone == false) {
+    creditMgr.consumeRspCredit();
+    peek(rspInPort, CHIResponseMsg) {
+      enqueue(c2cTxRspOutPort, CHIResponseMsg, response_latency) {
+        out_msg := in_msg;
+        out_msg.responder := machineID;
+        out_msg.txnId := intToAddress(tbe.storSlot);
+        out_msg.usesTxnId := true;
+        out_msg.isC2C := true;
+        out_msg.c2cSrcGateway := machineID;
+        out_msg.Destination.clear();
+        out_msg.Destination.add(machineID);
+      }
     }
   }
 }
@@ -455,8 +526,7 @@ action(forwardC2CRspToLocal, "fwdC2CRspL", desc="Forward C2C response to local N
       out_msg.txnId := tbe.localTxnID;
       out_msg.usesTxnId := false;  // non-DVM: local requester uses addr
       out_msg.isC2C := false;
-      out_msg.Destination.clear();
-      out_msg.Destination.add(tbe.localSrcID);
+      out_msg.Destination := localResponseDest(tbe);
     }
   }
 }
@@ -471,8 +541,7 @@ action(forwardC2CDatToLocal, "fwdC2CDatL", desc="Forward C2C data to local NoC")
       out_msg.txnId := tbe.localTxnID;
       out_msg.usesTxnId := false;  // non-DVM: local requester uses addr
       out_msg.isC2C := false;
-      out_msg.Destination.clear();
-      out_msg.Destination.add(tbe.localSrcID);
+      out_msg.Destination := localResponseDest(tbe);
     }
   }
 }
@@ -485,7 +554,7 @@ action(forwardC2CWrDatToLocal, "fwdC2CWrDatL",
     enqueue(datOutPort, CHIDataMsg, data_latency) {
       out_msg := in_msg;
       out_msg.responder := tbe.remoteSrcID;
-      out_msg.txnId := intToAddress(tbe.storSlot);
+      out_msg.txnId := tbe.txnID;
       out_msg.usesTxnId := false;
       out_msg.isC2C := false;
       out_msg.Destination.clear();
@@ -553,7 +622,7 @@ action(forwardCompAckToHN, "fwdCAHN",
     enqueue(rspOutPort, CHIResponseMsg, response_latency) {
       out_msg := in_msg;
       out_msg.responder := machineID;
-      out_msg.txnId := intToAddress(tbe.storSlot);
+      out_msg.txnId := tbe.txnID;
       out_msg.usesTxnId := false;
       out_msg.isC2C := false;
       out_msg.Destination.clear();
@@ -568,12 +637,14 @@ action(forwardLocalSnpRspToC2C, "fwdLSnpRspC2C",
        desc="Forward local snoop resp to C2C") {
   assert(is_valid(tbe));
   peek(rspInPort, CHIResponseMsg) {
-    enqueue(c2cTxRspOutPort, CHIResponseMsg, response_latency) {
-      out_msg := in_msg;
-      out_msg.isC2C := true;
-      out_msg.c2cSrcGateway := machineID;
-      out_msg.Destination.clear();
-      out_msg.Destination.add(machineID);
+    if (tbe.c2cSnpForwardDests.isElement(in_msg.responder)) {
+      enqueue(c2cTxRspOutPort, CHIResponseMsg, response_latency) {
+        out_msg := in_msg;
+        out_msg.isC2C := true;
+        out_msg.c2cSrcGateway := machineID;
+        out_msg.Destination.clear();
+        out_msg.Destination.add(machineID);
+      }
     }
   }
 }
@@ -583,12 +654,14 @@ action(forwardLocalSnpDatToC2C, "fwdLSnpDatC2C",
        desc="Forward local snoop resp data to C2C") {
   assert(is_valid(tbe));
   peek(datInPort, CHIDataMsg) {
-    enqueue(c2cTxDatOutPort, CHIDataMsg, data_latency) {
-      out_msg := in_msg;
-      out_msg.isC2C := true;
-      out_msg.c2cSrcGateway := machineID;
-      out_msg.Destination.clear();
-      out_msg.Destination.add(machineID);
+    if (tbe.c2cSnpForwardDests.isElement(in_msg.responder)) {
+      enqueue(c2cTxDatOutPort, CHIDataMsg, data_latency) {
+        out_msg := in_msg;
+        out_msg.isC2C := true;
+        out_msg.c2cSrcGateway := machineID;
+        out_msg.Destination.clear();
+        out_msg.Destination.add(machineID);
+      }
     }
   }
 }
@@ -600,6 +673,7 @@ action(forwardC2CSnpToLocal, "fwdC2CSnpL", desc="Forward C2C snoop to local") {
   snp_onchip := snp_onchip + 1;
   peek(c2cRxSnpInPort, CHIRequestMsg) {
     NetDest localTargets := in_msg.rmtDest.AND(allUpstreamDest());
+    localTargets := readMergeTable.expandSharers(address, localTargets);
     enqueue(snpOutPort, CHIRequestMsg, snoop_latency) {
       out_msg := in_msg;
       out_msg.isC2C := false;
@@ -741,9 +815,11 @@ action(markWriteDataForwarded, "mwdf",
 action(checkTxnComplete, "ctc",
        desc="If all data + CompAck done, trigger completion") {
   assert(is_valid(tbe));
-  if (allDataFlitsForwarded(tbe) && tbe.compAckDone) {
+  if (allDataFlitsForwarded(tbe) && tbe.compAckDone &&
+      tbe.pendingCompAcks == 0) {
     enqueue(triggerOutPort, TriggerMsg, 0) {
       out_msg.addr := address;
+      out_msg.tbeKey := tbeKey(tbe);
       out_msg.event := Event:CompleteTxn;
     }
   }
@@ -755,6 +831,7 @@ action(checkDataTxnComplete, "cdtc",
   if (allDataFlitsForwarded(tbe)) {
     enqueue(triggerOutPort, TriggerMsg, 0) {
       out_msg.addr := address;
+      out_msg.tbeKey := tbeKey(tbe);
       out_msg.event := Event:CompleteTxn;
     }
   }
@@ -767,6 +844,7 @@ action(checkWriteBackTxnComplete, "cwbtc",
       allDataFlitsForwarded(tbe)) {
     enqueue(triggerOutPort, TriggerMsg, 0) {
       out_msg.addr := address;
+      out_msg.tbeKey := tbeKey(tbe);
       out_msg.event := Event:CompleteTxn;
     }
   }
@@ -779,6 +857,7 @@ action(checkWriteTxnComplete, "cwtc",
       (tbe.writeCompReceived || !writeCompRequired(tbe.reqType))) {
     enqueue(triggerOutPort, TriggerMsg, 0) {
       out_msg.addr := address;
+      out_msg.tbeKey := tbeKey(tbe);
       out_msg.event := Event:CompleteTxn;
     }
   }
@@ -787,6 +866,9 @@ action(checkWriteTxnComplete, "cwtc",
 action(markCompAckDone, "mcad",
        desc="Record that CompAck has been forwarded") {
   assert(is_valid(tbe));
+  if (tbe.pendingCompAcks > 0) {
+    tbe.pendingCompAcks := tbe.pendingCompAcks - 1;
+  }
   tbe.compAckDone := true;
 }
 
@@ -802,6 +884,10 @@ action(markNoDataExpected, "mnde",
 
 action(popReqRdyQueue, "prq", desc="Pop reqRdy queue") {
   reqRdyInPort.dequeue(clockEdge());
+}
+
+action(popReqInQueue, "preq", desc="Pop reqIn queue") {
+  reqInPort.dequeue(clockEdge());
 }
 
 action(popRspInQueue, "prsp", desc="Pop rspIn queue") {
@@ -1012,6 +1098,10 @@ action(splitWrReqDataToReq, "swrr",
     tbe.peerC2CG := in_msg.c2cSrcGateway;
     tbe.localSrcID := machineID;
     assignTxnID(tbe);
+    txnKeyTable.bindC2CIn(tbe.remoteTxnID, tbeKey(tbe));
+    txnKeyTable.bindLocal(mapAddressToDownstreamMachine(address), tbe.txnID,
+          tbeKey(tbe));
+    txnKeyTable.bindLocalTxn(tbe.txnID, tbeKey(tbe));
     tbe.isWrite := true;
     // Buffer the data for later forwarding after DBID
     tbe.dataBlk := in_msg.dataBlk;
@@ -1047,7 +1137,7 @@ action(sendBufferedWriteData, "sbwd",
     out_msg.responder := machineID;
     out_msg.dataBlk := tbe.dataBlk;
     out_msg.bitMask := tbe.dataBlkValid;
-    out_msg.txnId := intToAddress(tbe.storSlot);
+    out_msg.txnId := tbe.txnID;
     out_msg.usesTxnId := false;  // HNF expects false for non-DVM
     out_msg.isC2C := false;
     out_msg.Destination.clear();

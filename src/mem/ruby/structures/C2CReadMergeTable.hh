@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2008 Mark D. Hill and David A. Wood
+ * Copyright (c) 2025 The gem5 Contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,41 +26,53 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __CPU_DIRECTEDTEST_DIRECTEDGENERATOR_HH__
-#define __CPU_DIRECTEDTEST_DIRECTEDGENERATOR_HH__
+#ifndef __MEM_RUBY_STRUCTURES_C2CREADMERGETABLE_HH__
+#define __MEM_RUBY_STRUCTURES_C2CREADMERGETABLE_HH__
 
-#include "cpu/testers/directedtest/DirectedGenerator.hh"
-#include "cpu/testers/directedtest/RubyDirectedTester.hh"
-#include "params/DirectedGenerator.hh"
-#include "sim/sim_object.hh"
+#include <unordered_map>
+
+#include "base/stats/group.hh"
+#include "base/types.hh"
+#include "mem/ruby/common/NetDest.hh"
 
 namespace gem5
 {
+namespace ruby
+{
 
-class DirectedGenerator : public SimObject
+class C2CReadMergeTable
 {
   public:
-    typedef DirectedGeneratorParams Params;
-    DirectedGenerator(const Params &p);
+    C2CReadMergeTable(statistics::Group *parent) {}
 
-    virtual ~DirectedGenerator() {}
-
-    virtual bool initiate() = 0;
-    virtual void performCallback(uint32_t proc, Addr address) = 0;
-    virtual bool
-    isReadyToIssue() const
+    void
+    addSharers(Addr addr, const NetDest &sharers)
     {
-        return false;
+        auto it = m_sharers.find(addr);
+        if (it == m_sharers.end()) {
+            m_sharers.emplace(addr, sharers);
+        } else {
+            it->second.addNetDest(sharers);
+        }
     }
 
-    void setDirectedTester(RubyDirectedTester *directed_tester);
+    NetDest
+    expandSharers(Addr addr, const NetDest &requested) const
+    {
+        NetDest expanded = requested;
+        auto it = m_sharers.find(addr);
+        if (it != m_sharers.end() &&
+            requested.intersectionIsNotEmpty(it->second)) {
+            expanded.addNetDest(it->second);
+        }
+        return expanded;
+    }
 
-  protected:
-    int m_num_cpus;
-    RequestorID requestorId;
-    RubyDirectedTester *m_directed_tester;
+  private:
+    std::unordered_map<Addr, NetDest> m_sharers;
 };
 
+} // namespace ruby
 } // namespace gem5
 
-#endif //__CPU_DIRECTEDTEST_DIRECTEDGENERATOR_HH__
+#endif // __MEM_RUBY_STRUCTURES_C2CREADMERGETABLE_HH__

@@ -132,6 +132,23 @@ parser.add_argument(
     metavar="N",
     help="Max buffered granules in C2C bridge TX queues (0 = unlimited).",
 )
+parser.add_argument(
+    "--issue-window",
+    type=int,
+    default=1,
+    metavar="N",
+    help="Max outstanding SeriesRequestGenerator requests (default 1).",
+)
+parser.add_argument(
+    "--disable-read-merge",
+    action="store_true",
+    help="Keep C2CG same-address ReadShared merge/fanout disabled.",
+)
+parser.add_argument(
+    "--enable-read-merge",
+    action="store_true",
+    help="Enable C2CG same-address ReadShared merge/fanout.",
+)
 
 args = parser.parse_args()
 
@@ -151,16 +168,21 @@ args.topology = "Crossbar"
 
 if args.test_type == "SeriesGetx":
     generator = SeriesRequestGenerator(
-        num_cpus=args.num_cpus, percent_writes=100
+        num_cpus=args.num_cpus,
+        percent_writes=100,
+        issue_window=args.issue_window,
     )
 elif args.test_type == "SeriesGets":
     generator = SeriesRequestGenerator(
-        num_cpus=args.num_cpus, percent_writes=0
+        num_cpus=args.num_cpus,
+        percent_writes=0,
+        issue_window=args.issue_window,
     )
 elif args.test_type == "SeriesGetMixed":
     generator = SeriesRequestGenerator(
         num_cpus=args.num_cpus,
         percent_writes=args.percent_writes,
+        issue_window=args.issue_window,
     )
 elif args.test_type == "Invalidate":
     generator = InvalidateGenerator(num_cpus=args.num_cpus)
@@ -217,6 +239,13 @@ system.ruby.network = SimpleNetwork(
     num_c2cgs=args.num_c2cgs,
     txq_size=args.txq_size,
 )
+
+for c2cg_list in c2cg_pair:
+    for c2cg in c2cg_list:
+        for controller in c2cg.getAllControllers():
+            controller.readmerge_enabled = (
+                args.enable_read_merge and not args.disable_read_merge
+            )
 
 # Build topology — Crossbar expects flat controller list
 topology = Ruby.create_topology(network_cntrls, args)

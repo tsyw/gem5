@@ -40,7 +40,12 @@ namespace gem5
 SeriesRequestGenerator::SeriesRequestGenerator(const Params &p)
     : DirectedGenerator(p),
       m_addr_increment_size(p.addr_increment_size),
-      m_percent_writes(p.percent_writes)
+      m_percent_writes(p.percent_writes),
+      m_issue_window(p.issue_window),
+      m_outstanding_count(0),
+      m_completed_this_cycle(0),
+      m_pending(p.num_cpus, false),
+      m_pending_address(p.num_cpus, 0)
 {
     m_status = ruby::SeriesRequestGeneratorStatus_Thinking;
     m_active_node = 0;
@@ -48,22 +53,26 @@ SeriesRequestGenerator::SeriesRequestGenerator(const Params &p)
 }
 
 SeriesRequestGenerator::~SeriesRequestGenerator()
-{
-}
+{}
 
 bool
 SeriesRequestGenerator::initiate()
 {
     DPRINTF(DirectedTest, "initiating request\n");
-    assert(m_status == ruby::SeriesRequestGeneratorStatus_Thinking);
+    if (m_issue_window <= 1) {
+        assert(m_status == ruby::SeriesRequestGeneratorStatus_Thinking);
+    } else if (m_outstanding_count >= m_issue_window ||
+               m_active_node >= m_num_cpus) {
+        return false;
+    }
 
-    RequestPort* port = m_directed_tester->getCpuPort(m_active_node);
+    RequestPort *port = m_directed_tester->getCpuPort(m_active_node);
 
     Request::Flags flags;
 
     // For simplicity, requests are assumed to be 1 byte-sized
-    RequestPtr req = std::make_shared<Request>(m_address, 1, flags,
-                                               requestorId);
+    RequestPtr req =
+        std::make_shared<Request>(m_address, 1, flags, requestorId);
 
     Packet::Command cmd;
     bool do_write = (rng->random(0, 100) < m_percent_writes);
@@ -79,6 +88,12 @@ SeriesRequestGenerator::initiate()
     if (port->sendTimingReq(pkt)) {
         DPRINTF(DirectedTest, "initiating request - successful\n");
         m_status = ruby::SeriesRequestGeneratorStatus_Request_Pending;
+        if (m_issue_window > 1) {
+            m_pending[m_active_node] = true;
+            m_pending_address[m_active_node] = m_address;
+            m_outstanding_count++;
+            m_active_node++;
+        }
         return true;
     } else {
         // If the packet did not issue, must delete
@@ -86,21 +101,50 @@ SeriesRequestGenerator::initiate()
         // will delete it
         delete pkt;
 
-        DPRINTF(DirectedTest, "failed to initiate request - sequencer not ready\n");
+        DPRINTF(DirectedTest,
+                "failed to initiate request - sequencer not ready\n");
         return false;
     }
+}
+
+bool
+SeriesRequestGenerator::isReadyToIssue() const
+{
+    return m_issue_window > 1 && m_active_node < m_num_cpus &&
+           m_outstanding_count < m_issue_window;
 }
 
 void
 SeriesRequestGenerator::performCallback(uint32_t proc, Addr address)
 {
-    assert(m_active_node == proc);
-    assert(m_address == address);
+    if (m_issue_window <= 1) {
+        assert(m_active_node == proc);
+        assert(m_address == address);
+        assert(m_status == ruby::SeriesRequestGeneratorStatus_Request_Pending);
+
+        m_status = ruby::SeriesRequestGeneratorStatus_Thinking;
+        m_active_node++;
+        if (m_active_node == m_num_cpus) {
+            //
+            // Cycle of requests completed, increment cycle completions and
+            // restart at cpu zero
+            //
+            m_directed_tester->incrementCycleCompletions();
+            m_address += m_addr_increment_size;
+            m_active_node = 0;
+        }
+        return;
+    }
+
+    assert(proc < m_pending.size());
+    assert(m_pending[proc]);
+    assert(m_pending_address[proc] == address);
     assert(m_status == ruby::SeriesRequestGeneratorStatus_Request_Pending);
 
-    m_status = ruby::SeriesRequestGeneratorStatus_Thinking;
-    m_active_node++;
-    if (m_active_node == m_num_cpus) {
+    m_pending[proc] = false;
+    m_outstanding_count--;
+    m_completed_this_cycle++;
+    if (m_completed_this_cycle == m_num_cpus) {
         //
         // Cycle of requests completed, increment cycle completions and restart
         // at cpu zero
@@ -108,6 +152,10 @@ SeriesRequestGenerator::performCallback(uint32_t proc, Addr address)
         m_directed_tester->incrementCycleCompletions();
         m_address += m_addr_increment_size;
         m_active_node = 0;
+        m_completed_this_cycle = 0;
+    }
+    if (m_outstanding_count == 0) {
+        m_status = ruby::SeriesRequestGeneratorStatus_Thinking;
     }
 }
 

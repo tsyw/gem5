@@ -42,7 +42,7 @@
 // Consume actions are placed BEFORE the forwarding action.
 // Return actions are placed BEFORE the pop action.
 
-// All 17 active states (for wildcard transition lists)
+// All states for wildcard transition lists (I plus 17 active states)
 // I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
 // WR_ACTIVE_DBID, WR_WAIT_COMP,
 // COMPACK_ACTIVE, DL_ACTIVE,
@@ -96,6 +96,11 @@ transition(I, {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
   consumeReqCredit;
   forwardReqToC2CTx;
   popReqRdyQueue;
+}
+
+transition(REQ_ACTIVE, OutReq_MergeReadShared) {
+  attachMergedReadFromReq;
+  popReqInQueue;
 }
 
 // Inbound read flow: remote RN -> peer C2CG -> C2C -> this C2CG -> local HN
@@ -254,8 +259,7 @@ transition(COMPACK_ACTIVE, {DatIn_CompData_In, DatIn_DataSepResp_In}) {
 
 // CompAck from local RN via NoC (outbound: consume RSP credit, forward to C2C TX)
 transition(COMPACK_ACTIVE, RspIn_CompAck_Out) {
-  consumeRspCredit;
-  forwardRspToC2CTx;
+  forwardFirstCompAckToC2CTx;
   markCompAckDone;
   checkTxnComplete;
   popRspInQueue;

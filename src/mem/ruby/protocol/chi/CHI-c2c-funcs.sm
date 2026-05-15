@@ -46,6 +46,54 @@ NetDest allPeerUpstreamDest();
 // Interface functions required by SLICC
 ////////////////////////////////////////////////////////////////////////////
 
+Addr tbeSlotKey(int slot) {
+  return intToAddress(slot * blockSize);
+}
+
+Addr tbeKey(TBE tbe) {
+  assert(is_valid(tbe));
+  return tbeSlotKey(tbe.storSlot);
+}
+
+TBE nullTBE(), return_by_pointer="yes" {
+  return OOD;
+}
+
+TBE lookupTBEByC2COut(Addr txnId), return_by_pointer="yes" {
+  if (txnKeyTable.hasC2COut(txnId)) {
+    return TBEs[txnKeyTable.lookupC2COut(txnId)];
+  }
+  return nullTBE();
+}
+
+TBE lookupTBEByC2CIn(Addr txnId), return_by_pointer="yes" {
+  if (txnKeyTable.hasC2CIn(txnId)) {
+    return TBEs[txnKeyTable.lookupC2CIn(txnId)];
+  }
+  return nullTBE();
+}
+
+TBE lookupTBEByLocal(MachineID src, Addr txnId), return_by_pointer="yes" {
+  if (txnKeyTable.hasLocal(src, txnId)) {
+    return TBEs[txnKeyTable.lookupLocal(src, txnId)];
+  }
+  return nullTBE();
+}
+
+TBE lookupTBEByLocalTxn(Addr txnId), return_by_pointer="yes" {
+  if (txnKeyTable.hasLocalTxn(txnId)) {
+    return TBEs[txnKeyTable.lookupLocalTxn(txnId)];
+  }
+  return nullTBE();
+}
+
+TBE lookupTBEByAddress(Addr addr), return_by_pointer="yes" {
+  if (txnKeyTable.hasAddress(addr)) {
+    return TBEs[txnKeyTable.lookupAddress(addr)];
+  }
+  return nullTBE();
+}
+
 State getState(TBE tbe, Addr addr) {
   if (is_valid(tbe)) {
     return tbe.state;
@@ -65,7 +113,7 @@ void setState(TBE tbe, Addr addr, State state) {
 }
 
 AccessPermission getAccessPermission(Addr addr) {
-  TBE tbe := TBEs[addr];
+  TBE tbe := lookupTBEByAddress(addr);
   if (is_valid(tbe)) {
     return CHI_C2C_State_to_permission(tbe.state);
   }
@@ -80,7 +128,7 @@ void setAccessPermission(Addr addr, State state) {
 }
 
 void functionalRead(Addr addr, Packet *pkt, WriteMask &mask) {
-  TBE tbe := TBEs[addr];
+  TBE tbe := lookupTBEByAddress(addr);
   if (is_valid(tbe)) {
     testAndReadMask(addr, tbe.dataBlk, mask, pkt);
   }
@@ -89,7 +137,7 @@ void functionalRead(Addr addr, Packet *pkt, WriteMask &mask) {
 
 int functionalWrite(Addr addr, Packet *pkt) {
   int num_functional_writes := 0;
-  TBE tbe := TBEs[addr];
+  TBE tbe := lookupTBEByAddress(addr);
   if (is_valid(tbe)) {
     num_functional_writes := num_functional_writes +
       testAndWrite(addr, tbe.dataBlk, pkt);
@@ -357,6 +405,53 @@ bool isDatalessRequest(CHIRequestType type) {
   return false;
 }
 
+bool needsRequesterCompAck(CHIRequestType type) {
+  if (isReadRequest(type) || type == CHIRequestType:CleanUnique) {
+    return true;
+  }
+  return false;
+}
+
+bool canMergeLocalRead(TBE merge_tbe, CHIRequestType type,
+                       MachineID requestor) {
+  if (is_valid(merge_tbe) == false) {
+    return false;
+  }
+  if (type != CHIRequestType:ReadShared) {
+    return false;
+  }
+  if (merge_tbe.reqType != CHIRequestType:ReadShared) {
+    return false;
+  }
+  if (merge_tbe.isOutbound == false) {
+    return false;
+  }
+  if (merge_tbe.state != State:REQ_ACTIVE) {
+    return false;
+  }
+  if (merge_tbe.expectingData == false || merge_tbe.expectingComp) {
+    return false;
+  }
+  if (merge_tbe.rxtxBytes != 0 || merge_tbe.compAckDone) {
+    return false;
+  }
+  if (merge_tbe.readFanoutDests.isElement(requestor)) {
+    return false;
+  }
+  return true;
+}
+
+NetDest localResponseDest(TBE tbe) {
+  NetDest dest;
+  if (tbe.isOutbound && tbe.isRead &&
+      tbe.readFanoutDests.count() > 0) {
+    dest := tbe.readFanoutDests;
+  } else {
+    dest.add(tbe.localSrcID);
+  }
+  return dest;
+}
+
 // Determine if a request type is atomic
 bool isAtomicRequest(CHIRequestType type) {
   if ((type == CHIRequestType:AtomicReturn) ||
@@ -429,7 +524,12 @@ void clearTBEDefaults(TBE tbe) {
   tbe.dataBlkValid.clear();
   tbe.rxtxBytes := 0;
   tbe.pendingSnpResps := 0;
+  tbe.c2cSnpResponsesToForward := 0;
+  tbe.c2cSnpForwardDests.clear();
+  tbe.snpDataRespondersSeen.clear();
   tbe.compAckDone := false;
+  tbe.pendingCompAcks := 0;
+  tbe.readFanoutDests.clear();
 }
 
 void assignTxnID(TBE tbe) {

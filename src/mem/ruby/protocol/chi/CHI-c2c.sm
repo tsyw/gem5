@@ -52,6 +52,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   bool snoop_support := "true";
   bool atomic_support := "true";
   bool writepush_enabled := "true";
+  bool readmerge_enabled := "false";
 
   // Data channel width
   int data_channel_size;
@@ -215,6 +216,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
     // Outbound request events (local NoC -> C2C)
     OutReq_ReadShared,           desc="ReadShared for remote address";
+    OutReq_MergeReadShared,      desc="Merge local ReadShared with active read";
     OutReq_ReadUnique,           desc="ReadUnique for remote address";
     OutReq_ReadOnce,             desc="ReadOnce for remote address";
     OutReq_ReadNoSnp,            desc="ReadNoSnp for remote address";
@@ -350,6 +352,12 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     bool expectingData,         desc="Waiting for separated read data";
     bool expectingComp,         desc="Waiting for separated read response";
     int pendingSnpResps,        desc="Outstanding snoop responses";
+    int c2cSnpResponsesToForward,
+      desc="Inbound snoop responses to forward back over C2C";
+    NetDest c2cSnpForwardDests,
+      desc="Original local snoop responders to forward back over C2C";
+    NetDest snpDataRespondersSeen,
+      desc="Snoop data responders already counted";
     bool retryPending,          desc="HN sent RetryAck";
     bool retryGrantPending,     desc="HN sent PCrdGrant";
     State retryState,           desc="State to resume after PCrdGrant";
@@ -361,6 +369,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     WriteMask dataBlkValid,     desc="Valid bytes in data buffer";
     int rxtxBytes,              desc="Bytes sent or received";
     bool compAckDone,           desc="CompAck forwarded, awaiting data";
+    int pendingCompAcks,        desc="Requester CompAcks still expected";
+    NetDest readFanoutDests,    desc="Local destinations for merged reads";
     bool isOutbound,            desc="True=outbound (local→remote), false=inbound";
   }
 
@@ -410,6 +420,36 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   C2CCreditManager creditMgr,
       constructor='this, m_num_resource_planes, m_init_req_credits_per_rp, m_init_req_credits_shared, m_init_rsp_credits, m_init_snp_credits, m_init_dat_credits, m_init_dat_credits_shared, m_init_misc_credits';
 
+  structure(C2CReadMergeTable, external="yes") {
+    void addSharers(Addr, NetDest);
+    NetDest expandSharers(Addr, NetDest);
+  }
+
+  C2CReadMergeTable readMergeTable,
+      constructor='this';
+
+  structure(C2CTxnKeyTable, external="yes") {
+    void bindC2COut(Addr, Addr);
+    bool hasC2COut(Addr);
+    Addr lookupC2COut(Addr);
+    void bindC2CIn(Addr, Addr);
+    bool hasC2CIn(Addr);
+    Addr lookupC2CIn(Addr);
+    void bindLocal(MachineID, Addr, Addr);
+    bool hasLocal(MachineID, Addr);
+    Addr lookupLocal(MachineID, Addr);
+    void bindLocalTxn(Addr, Addr);
+    bool hasLocalTxn(Addr);
+    Addr lookupLocalTxn(Addr);
+    void bindAddress(Addr, Addr);
+    bool hasAddress(Addr);
+    Addr lookupAddress(Addr);
+    void eraseKey(Addr);
+  }
+
+  C2CTxnKeyTable txnKeyTable,
+      constructor='this';
+
   // Separate TBE table for snoop forwarding (deadlock avoidance)
   TBETable snpTBEs, template="<CHI_C2C_TBE>",
       constructor="m_number_of_snoop_TBEs";
@@ -440,6 +480,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   // Internal trigger message types
   structure(TriggerMsg, desc="Internal trigger", interface="Message") {
     Addr addr;
+    Addr tbeKey;
     Event event;
     bool functionalRead(Packet *pkt) { return false; }
     bool functionalRead(Packet *pkt, WriteMask &mask) { return false; }
@@ -467,6 +508,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   int tbeFullRetries,   default="0";
   int writePushCount,   default="0";
   int dvmReqsSent,      default="0";
+  int readMergeAttachCount, default="0";
   // Per-transaction latency tracking (FR-C03)
   // txnLatencySum / txnLatencyCount gives average latency in ticks
   int txnLatencyCount,  default="0";
