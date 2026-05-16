@@ -237,6 +237,8 @@ action(attachMergedReadFromReq, "amr",
   assert(is_valid(tbe));
   peek(reqInPort, CHIRequestMsg) {
     assert(canMergeLocalRead(tbe, in_msg.type, in_msg.requestor));
+    txnKeyTable.bindLocal(in_msg.requestor, in_msg.txnId,
+                          address, tbeKey(tbe));
     tbe.readFanoutDests.add(in_msg.requestor);
     tbe.pendingCompAcks := tbe.pendingCompAcks + 1;
     readMergeAttachCount := readMergeAttachCount + 1;

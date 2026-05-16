@@ -138,19 +138,26 @@ class C2CTxnKeyTable
     void
     bindLocal(MachineID src, Addr txn_id, Addr addr, Addr key)
     {
-        m_localKeys[LocalKey{src, txn_id, addr}] = key;
+        auto &keys = m_localKeys[LocalKey{src, txn_id, addr}];
+        if (std::find(keys.begin(), keys.end(), key) == keys.end()) {
+            keys.push_back(key);
+        }
     }
 
     bool
     hasLocal(MachineID src, Addr txn_id, Addr addr) const
     {
-        return contains(m_localKeys, LocalKey{src, txn_id, addr});
+        auto it = m_localKeys.find(LocalKey{src, txn_id, addr});
+        return it != m_localKeys.end() && !it->second.empty();
     }
 
     Addr
     lookupLocal(MachineID src, Addr txn_id, Addr addr) const
     {
-        return lookup(m_localKeys, LocalKey{src, txn_id, addr});
+        auto it = m_localKeys.find(LocalKey{src, txn_id, addr});
+        assert(it != m_localKeys.end());
+        assert(!it->second.empty());
+        return it->second.front();
     }
 
     void
@@ -201,7 +208,7 @@ class C2CTxnKeyTable
     {
         eraseByValue(m_c2cOutKeys, key);
         eraseByValue(m_c2cInScopedKeys, key);
-        eraseByValue(m_localKeys, key);
+        eraseVectorByValue(m_localKeys, key);
         eraseByValue(m_localTxnKeys, key);
 
         for (auto it = m_addrKeys.begin(); it != m_addrKeys.end();) {
@@ -245,10 +252,27 @@ class C2CTxnKeyTable
         }
     }
 
+    template <class Key, class Hash = std::hash<Key>>
+    void
+    eraseVectorByValue(std::unordered_map<Key, std::vector<Addr>, Hash> &map,
+                       Addr value)
+    {
+        for (auto it = map.begin(); it != map.end();) {
+            auto &keys = it->second;
+            keys.erase(std::remove(keys.begin(), keys.end(), value),
+                       keys.end());
+            if (keys.empty()) {
+                it = map.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     std::unordered_map<Addr, Addr> m_c2cOutKeys;
     std::unordered_map<C2CInKey, Addr, C2CInKeyHash> m_c2cInScopedKeys;
     std::unordered_map<Addr, Addr> m_localTxnKeys;
-    std::unordered_map<LocalKey, Addr, LocalKeyHash> m_localKeys;
+    std::unordered_map<LocalKey, std::vector<Addr>, LocalKeyHash> m_localKeys;
     std::unordered_map<Addr, std::vector<Addr>> m_addrKeys;
 };
 
