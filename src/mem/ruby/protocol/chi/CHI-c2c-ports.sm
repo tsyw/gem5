@@ -84,7 +84,8 @@ in_port(c2cRxRspInPort, CHIResponseMsg, c2cRxRsp, rank=12,
         }
       } else {
         if (in_msg.type == CHIResponseType:CompAck) {
-          tbe := lookupTBEByC2CIn(in_msg.txnId);
+          tbe := lookupTBEByC2CInScoped(in_msg.c2cSrcGateway,
+                                        in_msg.txnId, in_msg.addr);
         } else {
           tbe := lookupTBEByC2COut(in_msg.txnId);
         }
@@ -168,7 +169,8 @@ in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
         // inbound TBE → write/atomic data from remote (_In)
         TBE tbe;
         if (isWriteDataType(in_msg.type)) {
-          tbe := lookupTBEByC2CIn(in_msg.txnId);
+          tbe := lookupTBEByC2CInScoped(in_msg.c2cSrcGateway,
+                                        in_msg.txnId, in_msg.addr);
         } else {
           tbe := lookupTBEByC2COut(in_msg.txnId);
         }
@@ -180,7 +182,7 @@ in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
                   tbe.remoteSrcID, tbe.remoteTxnID);
           if (tbe.isOutbound) {
             if (isWriteDataType(in_msg.type)) {
-              trigger(Event:DatIn_WrData_Remote, in_msg.addr, tbe);
+              error("c2cRxDatInPort: write data matched outbound TBE");
             } else {
               Event ev := dataToEventOut(in_msg.type);
               if (tbe.state == State:ACTIVE_WAIT_SEP) {
@@ -227,12 +229,13 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
       // RetryAck and PCrdGrant are non-directional (always from local HN)
       if ((in_msg.type == CHIResponseType:RetryAck) ||
           (in_msg.type == CHIResponseType:PCrdGrant)) {
-        TBE tbe := lookupTBEByLocal(in_msg.responder, in_msg.txnId);
+        TBE tbe := lookupTBEByLocal(in_msg.responder, in_msg.txnId,
+                  in_msg.addr);
         if (is_valid(tbe) && (tbe.isOutbound == false) &&
             (in_msg.txnId == tbe.txnID)) {
           if (in_msg.type == CHIResponseType:RetryAck) {
             if (tbe.retryPending == false && tbe.retryGrantPending) {
-              trigger(Event:RetryAckWithGrantFromHN, in_msg.addr, tbe);
+              trigger(Event:RetryAckAfterPCrdGrantFromHN, in_msg.addr, tbe);
             } else if (tbe.retryPending == false) {
               trigger(Event:RetryAckFromHN, in_msg.addr, tbe);
             } else {
@@ -244,20 +247,27 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
               rspInPort.dequeue(clockEdge());
             }
           } else if (tbe.retryPending) {
-            if (tbe.retryState == State:REQ_ACTIVE) {
-              trigger(Event:PCrdGrantReqFromHN, in_msg.addr, tbe);
-            } else if (tbe.retryState == State:WR_ACTIVE_DBID) {
-              trigger(Event:PCrdGrantWrFromHN, in_msg.addr, tbe);
-            } else if (tbe.retryState == State:DL_ACTIVE) {
-              trigger(Event:PCrdGrantDlFromHN, in_msg.addr, tbe);
-            } else if (tbe.retryState == State:EV_ACTIVE) {
-              trigger(Event:PCrdGrantEvFromHN, in_msg.addr, tbe);
-            } else if (tbe.retryState == State:ATOMIC_ACTIVE) {
-              trigger(Event:PCrdGrantAtomicFromHN, in_msg.addr, tbe);
-            } else if (tbe.retryState == State:WR_PUSH_FWD_WAIT_DBID) {
-              trigger(Event:PCrdGrantWrPushFromHN, in_msg.addr, tbe);
+            if (tbe.state == State:RETRY_WAIT) {
+              if (tbe.retryState == State:REQ_ACTIVE) {
+                trigger(Event:PCrdGrantRetryReqFromHN, in_msg.addr, tbe);
+              } else if (tbe.retryState == State:WR_ACTIVE_DBID) {
+                trigger(Event:PCrdGrantRetryWriteFromHN, in_msg.addr, tbe);
+              } else if (tbe.retryState == State:COMPACK_DL_ACTIVE) {
+                trigger(Event:PCrdGrantRetryCompAckDatalessFromHN,
+                        in_msg.addr, tbe);
+              } else if (tbe.retryState == State:COMP_ONLY_DL_ACTIVE) {
+                trigger(Event:PCrdGrantRetryCompOnlyDatalessFromHN,
+                        in_msg.addr, tbe);
+              } else if (tbe.retryState == State:ATOMIC_ACTIVE) {
+                trigger(Event:PCrdGrantRetryAtomicFromHN, in_msg.addr, tbe);
+              } else if (tbe.retryState == State:WR_PUSH_FWD_WAIT_DBID) {
+                trigger(Event:PCrdGrantRetryWritePushFromHN,
+                        in_msg.addr, tbe);
+              } else {
+                error("rspInPort: invalid retryState for PCrdGrant");
+              }
             } else {
-              error("rspInPort: unsupported retryState for PCrdGrant");
+              trigger(Event:PCrdGrantFromHN, in_msg.addr, tbe);
             }
           } else if (tbe.retryGrantPending == false) {
             trigger(Event:EarlyPCrdGrantFromHN, in_msg.addr, tbe);
@@ -304,9 +314,10 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
           trigger(Event:RspIn_SnpResp_More_In, in_msg.addr, tbe);
         }
       } else {
-        TBE tbe := lookupTBEByLocal(in_msg.responder, in_msg.txnId);
+        TBE tbe := lookupTBEByLocal(in_msg.responder, in_msg.txnId,
+                                    in_msg.addr);
         if (is_valid(tbe) == false) {
-          tbe := lookupTBEByLocalTxn(in_msg.txnId);
+          tbe := lookupTBEByLocalTxn(in_msg.txnId, in_msg.addr);
         }
         if (is_valid(tbe)) {
           if (tbe.isOutbound) {
@@ -320,6 +331,37 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
                 tbe.expectingComp) {
               trigger(Event:RspIn_SepReadResp_Done_In,
                       in_msg.addr, tbe);
+            } else if (tbe.state == State:RETRY_WAIT) {
+              if (ev == Event:RspIn_CompDBIDResp_In) {
+                if (in_msg.stale) {
+                  trigger(Event:RspIn_StaleRetryCompDBIDResp_In,
+                          in_msg.addr, tbe);
+                } else {
+                  error("rspInPort: non-stale CompDBIDResp in RETRY_WAIT");
+                }
+              } else if (ev == Event:RspIn_Comp_In) {
+                if (tbe.retryState == State:WR_PUSH_FWD_WAIT_DBID) {
+                  trigger(Event:RspIn_RetryCompWritePush_In,
+                          in_msg.addr, tbe);
+                } else if (tbe.isWrite) {
+                  trigger(Event:RspIn_RetryCompWrite_In,
+                          in_msg.addr, tbe);
+                } else if (tbe.isDataless &&
+                           needsRequesterCompAck(tbe.reqType)) {
+                  trigger(Event:RspIn_RetryCompAckDataless_In,
+                          in_msg.addr, tbe);
+                } else if (tbe.isDataless) {
+                  trigger(Event:RspIn_RetryCompOnlyDataless_In,
+                          in_msg.addr, tbe);
+                } else if (tbe.isAtomic) {
+                  trigger(Event:RspIn_RetryCompAtomic_In,
+                          in_msg.addr, tbe);
+                } else {
+                  trigger(ev, in_msg.addr, tbe);
+                }
+              } else {
+                trigger(ev, in_msg.addr, tbe);
+              }
             } else {
               trigger(ev, in_msg.addr, tbe);
             }
@@ -376,9 +418,10 @@ in_port(datInPort, CHIDataMsg, datIn, rank=9,
           }
         }
       } else {
-        TBE tbe := lookupTBEByLocal(in_msg.responder, in_msg.txnId);
+        TBE tbe := lookupTBEByLocal(in_msg.responder, in_msg.txnId,
+                                    in_msg.addr);
         if (is_valid(tbe) == false) {
-          tbe := lookupTBEByLocalTxn(in_msg.txnId);
+          tbe := lookupTBEByLocalTxn(in_msg.txnId, in_msg.addr);
         }
         if (is_valid(tbe)) {
           if (tbe.isOutbound) {
@@ -391,7 +434,7 @@ in_port(datInPort, CHIDataMsg, datIn, rank=9,
             }
             trigger(dataToEventOut(in_msg.type), in_msg.addr, tbe);
           } else if (isWriteDataType(in_msg.type)) {
-            trigger(Event:DatIn_WrData_Local, in_msg.addr, tbe);
+            error("datInPort: write data matched inbound TBE");
           } else {
             // Inbound TBE: read/atomic response data from local HN going to C2C TX
             Event ev := dataToEventIn(in_msg.type);
@@ -410,11 +453,11 @@ in_port(datInPort, CHIDataMsg, datIn, rank=9,
               }
             } else if ((tbe.state == State:RETRY_WAIT) &&
                        (ev == Event:DatIn_CompData_In)) {
-              if (tbe.retryState == State:REQ_ACTIVE) {
-                trigger(Event:DatIn_CompData_RetryReq_In,
+              if (tbe.isRead) {
+                trigger(Event:DatIn_RetryCompDataReq_In,
                         in_msg.addr, tbe);
-              } else if (tbe.retryState == State:ATOMIC_ACTIVE) {
-                trigger(Event:DatIn_CompData_RetryAtomic_In,
+              } else if (tbe.isAtomic) {
+                trigger(Event:DatIn_RetryCompDataAtomic_In,
                         in_msg.addr, tbe);
               } else {
                 trigger(ev, in_msg.addr, tbe);
@@ -563,11 +606,11 @@ in_port(reqRdyInPort, CHIRequestMsg, reqRdy, rank=3) {
         } else if (writepush_enabled == false &&
                    in_msg.type == CHIRequestType:WriteCleanFull) {
           // WriteCleanFull can get early Comp (no DBID), like
-          // WriteEvictFull. Uses evict-write-pull path (HR-7).
+          // WriteEvictFull, but the request opcode stays WriteCleanFull.
           DPRINTF(RubySlicc,
-              "reqRdyInPort dispatch EvictWritePull: addr=%#x type=%s requestor=%s\n",
+              "reqRdyInPort dispatch WriteCleanNoPush: addr=%#x type=%s requestor=%s\n",
               in_msg.addr, in_msg.type, in_msg.requestor);
-          trigger(Event:OutReq_EvictWritePull, in_msg.addr,
+          trigger(Event:OutReq_WriteCleanNoPush, in_msg.addr,
               nullTBE());
         } else {
           DPRINTF(RubySlicc,
@@ -608,11 +651,12 @@ in_port(c2cRxReqInPort, CHIRequestMsg, c2cRxReq, rank=2) {
             trigger(Event:InReq_Write, in_msg.addr, nullTBE());
           } else if (isAtomicRequest(in_msg.type)) {
             trigger(Event:InReq_Atomic, in_msg.addr, nullTBE());
-          } else if (isEvictLikeRequest(in_msg.type)) {
+          } else if (in_msg.type == CHIRequestType:CleanUnique) {
+            trigger(Event:InReq_CleanUnique, in_msg.addr, nullTBE());
+          } else if (isCompOnlyDatalessRequest(in_msg.type)) {
             trigger(Event:InReq_Evict, in_msg.addr, nullTBE());
           } else {
-            trigger(Event:InReq_Dataless, in_msg.addr,
-                    nullTBE());
+            error("Invalid CHIRequestType for C2CG c2cRxReqInPort");
           }
         } else {
           // Cannot send RetryAck across C2C; stall

@@ -66,23 +66,28 @@ TBE lookupTBEByC2COut(Addr txnId), return_by_pointer="yes" {
   return nullTBE();
 }
 
-TBE lookupTBEByC2CIn(Addr txnId), return_by_pointer="yes" {
-  if (txnKeyTable.hasC2CIn(txnId)) {
-    return TBEs[txnKeyTable.lookupC2CIn(txnId)];
+TBE lookupTBEByC2CInScoped(MachineID peer, Addr txnId, Addr addr),
+    return_by_pointer="yes" {
+  if (txnKeyTable.hasC2CInScoped(peer, txnId, addr)) {
+    return TBEs[txnKeyTable.lookupC2CInScoped(peer, txnId, addr)];
   }
   return nullTBE();
 }
 
-TBE lookupTBEByLocal(MachineID src, Addr txnId), return_by_pointer="yes" {
-  if (txnKeyTable.hasLocal(src, txnId)) {
-    return TBEs[txnKeyTable.lookupLocal(src, txnId)];
+TBE lookupTBEByLocal(MachineID src, Addr txnId, Addr addr),
+    return_by_pointer="yes" {
+  if (txnKeyTable.hasLocal(src, txnId, addr)) {
+    return TBEs[txnKeyTable.lookupLocal(src, txnId, addr)];
   }
   return nullTBE();
 }
 
-TBE lookupTBEByLocalTxn(Addr txnId), return_by_pointer="yes" {
+TBE lookupTBEByLocalTxn(Addr txnId, Addr addr), return_by_pointer="yes" {
   if (txnKeyTable.hasLocalTxn(txnId)) {
-    return TBEs[txnKeyTable.lookupLocalTxn(txnId)];
+    TBE local_tbe := TBEs[txnKeyTable.lookupLocalTxn(txnId)];
+    if (local_tbe.addr == addr) {
+      return local_tbe;
+    }
   }
   return nullTBE();
 }
@@ -168,12 +173,9 @@ void printResources() {
                 storDvmTBEs.size(), storDvmTBEs.capacity());
 }
 
-// Determine if a request type is dataless (no CompAck: Evict-like)
-bool isEvictLikeRequest(CHIRequestType type) {
-  if ((type == CHIRequestType:Evict) ||
-      (type == CHIRequestType:CleanShared) ||
-      (type == CHIRequestType:CleanInvalid) ||
-      (type == CHIRequestType:MakeInvalid)) {
+// Dataless requests whose Comp is terminal in the supported C2CG subset.
+bool isCompOnlyDatalessRequest(CHIRequestType type) {
+  if (type == CHIRequestType:Evict) {
     return true;
   }
   return false;
@@ -207,7 +209,7 @@ Event reqToEvent(CHIRequestType type) {
     return Event:OutReq_WriteNoSnpFull;
   } else if (type == CHIRequestType:WriteNoSnpPtl) {
     return Event:OutReq_WriteNoSnpPtl;
-  } else if (isEvictLikeRequest(type)) {
+  } else if (isCompOnlyDatalessRequest(type)) {
     return Event:OutReq_Evict;
   } else if (type == CHIRequestType:AtomicReturn) {
     return Event:OutReq_AtomicLoad;
@@ -399,7 +401,7 @@ bool writeCompRequired(CHIRequestType type) {
 // Determine if a request type is dataless
 bool isDatalessRequest(CHIRequestType type) {
   if ((type == CHIRequestType:CleanUnique) ||
-      isEvictLikeRequest(type)) {
+      isCompOnlyDatalessRequest(type)) {
     return true;
   }
   return false;

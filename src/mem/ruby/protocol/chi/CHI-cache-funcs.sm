@@ -851,8 +851,11 @@ void prepareRequestRetry(TBE tbe, CHIRequestMsg & out_msg) {
   out_msg.seqReq := tbe.seqReq;
   out_msg.is_local_pf := false;
   out_msg.is_remote_pf := tbe.is_local_pf || tbe.is_remote_pf;
+  out_msg.txnId := tbe.txnId;
   out_msg.atomic_op.clear();
   out_msg.atomic_op.orMask(tbe.atomic_op);
+
+  assert(tbe.txnId != static_cast(Addr, "value", -1));
 }
 
 void prepareRequestRetryDVM(TBE tbe, CHIRequestMsg & out_msg) {

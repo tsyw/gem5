@@ -212,8 +212,12 @@ action(recordLocalIDs_fromReq, "rlid", desc="Record local IDs from request") {
     tbe.localFwdRequestor := in_msg.fwdRequestor;
     tbe.localTxnID := in_msg.txnId;
     tbe.remoteSrcID := machineID;
-    txnKeyTable.bindLocal(tbe.localSrcID, tbe.localTxnID, key);
-    txnKeyTable.bindC2COut(intToAddress(tbe.storSlot), key);
+    assignTxnID(tbe);
+    if (isCompOnlyDatalessRequest(in_msg.type) == false) {
+      txnKeyTable.bindLocal(tbe.localSrcID, tbe.localTxnID,
+                            address, key);
+    }
+    txnKeyTable.bindC2COut(tbe.txnID, key);
     tbe.isRead := isReadRequest(in_msg.type);
     tbe.isWrite := isWriteRequest(in_msg.type);
     tbe.isDataless := isDatalessRequest(in_msg.type);
@@ -251,13 +255,14 @@ action(recordRemoteIDs_fromC2CReq, "rrid", desc="Record remote IDs from C2C req"
     tbe.reqType := in_msg.type;
     tbe.remoteSrcID := in_msg.origSrcID;
     tbe.remoteTxnID := in_msg.txnId;
+    tbe.peerC2CG := in_msg.c2cSrcGateway;
     tbe.localSrcID := machineID;
     assignTxnID(tbe);
-    txnKeyTable.bindC2CIn(tbe.remoteTxnID, key);
+    txnKeyTable.bindC2CInScoped(tbe.peerC2CG, tbe.remoteTxnID,
+                  address, key);
     txnKeyTable.bindLocal(mapAddressToDownstreamMachine(address), tbe.txnID,
-                          key);
+                address, key);
     txnKeyTable.bindLocalTxn(tbe.txnID, key);
-    tbe.peerC2CG := in_msg.c2cSrcGateway;
     tbe.isRead := isReadRequest(in_msg.type);
     tbe.isWrite := isWriteRequest(in_msg.type);
     tbe.isDataless := isDatalessRequest(in_msg.type);
@@ -284,6 +289,18 @@ action(recordInboundSnpIDs, "ribsnp",
     tbe.reqType := in_msg.type;
     tbe.peerC2CG := in_msg.c2cSrcGateway;
     tbe.isSnoop := true;
+  }
+}
+
+action(bindLocalDBIDFromC2CRsp, "bldb",
+       desc="Bind remote DBID for local write data") {
+  assert(is_valid(tbe));
+  peek(c2cRxRspInPort, CHIResponseMsg) {
+    txnKeyTable.bindLocal(tbe.localSrcID, in_msg.dbid,
+                address, tbeKey(tbe));
+    DPRINTF(RubySlicc,
+            "C2C bind write DBID addr=%#x localSrc=%s localTxn=%#x dbid=%#x\n",
+            address, tbe.localSrcID, tbe.localTxnID, in_msg.dbid);
   }
 }
 
@@ -377,7 +394,7 @@ action(forwardReqToC2CTx, "fwdReqC2C", desc="Forward request to C2C TX REQ") {
     enqueue(c2cTxReqOutPort, CHIRequestMsg, request_latency) {
       out_msg := in_msg;
       out_msg.requestor := machineID;
-      out_msg.txnId := intToAddress(tbe.storSlot);
+      out_msg.txnId := tbe.txnID;
       out_msg.usesTxnId := true;
       out_msg.isC2C := true;
       // Keep the stable remote cache identity in origSrcID; fwdRequestor
@@ -398,7 +415,7 @@ action(forwardRspToC2CTx, "fwdRspC2C", desc="Forward response to C2C TX RSP") {
     enqueue(c2cTxRspOutPort, CHIResponseMsg, response_latency) {
       out_msg := in_msg;
       out_msg.responder := machineID;
-      out_msg.txnId := intToAddress(tbe.storSlot);
+      out_msg.txnId := tbe.txnID;
       out_msg.usesTxnId := true;
       out_msg.isC2C := true;
       out_msg.c2cSrcGateway := machineID;
@@ -417,7 +434,7 @@ action(forwardFirstCompAckToC2CTx, "fwd1CAckC2C",
       enqueue(c2cTxRspOutPort, CHIResponseMsg, response_latency) {
         out_msg := in_msg;
         out_msg.responder := machineID;
-        out_msg.txnId := intToAddress(tbe.storSlot);
+        out_msg.txnId := tbe.txnID;
         out_msg.usesTxnId := true;
         out_msg.isC2C := true;
         out_msg.c2cSrcGateway := machineID;
@@ -434,7 +451,7 @@ action(forwardDatToC2CTx, "fwdDatC2C", desc="Forward data to C2C TX DAT") {
     enqueue(c2cTxDatOutPort, CHIDataMsg, data_latency) {
       out_msg := in_msg;
       out_msg.responder := machineID;
-      out_msg.txnId := intToAddress(tbe.storSlot);
+      out_msg.txnId := tbe.txnID;
       out_msg.usesTxnId := true;
       out_msg.isC2C := true;
       out_msg.c2cSrcGateway := machineID;
@@ -714,7 +731,7 @@ action(sendPCrdGrant, desc="Send PCrdGrant to retrying requester") {
   }
 }
 
-action(recordPCrdType, "rpct", desc="Record PCrdType from RetryAck") {
+action(markRetryPending, "mrp", desc="Mark RetryAck pending") {
   assert(is_valid(tbe));
   tbe.retryPending := true;
   retryAbsorbCount := retryAbsorbCount + 1;
@@ -726,17 +743,17 @@ action(recordPCrdGrant, "rpcg",
   tbe.retryGrantPending := true;
 }
 
+action(clearRetryState, "crst", desc="Clear retry bookkeeping") {
+  assert(is_valid(tbe));
+  tbe.retryPending := false;
+  tbe.retryGrantPending := false;
+  tbe.retryState := State:I;
+}
+
 action(saveRetryState, "srst",
   desc="Remember current state as retry resume state") {
   assert(is_valid(tbe));
   tbe.retryState := tbe.state;
-}
-
-action(resumeRetryState, "rrst",
-       desc="Restore retry resume state before reissue") {
-  assert(is_valid(tbe));
-  assert(tbe.retryState != State:I);
-  setState(tbe, address, tbe.retryState);
 }
 
 action(reissueRequest, "reis", desc="Re-issue request after PCrdGrant") {
@@ -1074,7 +1091,7 @@ action(combineAndSendWritePush, "cwp",
       out_msg.responder := tbe.localSrcID;
       out_msg.dataBlk := in_msg.dataBlk;
       out_msg.bitMask := in_msg.bitMask;
-      out_msg.txnId := intToAddress(tbe.storSlot);
+      out_msg.txnId := tbe.txnID;
       out_msg.usesTxnId := true;
       out_msg.isC2C := true;
       out_msg.c2cSrcGateway := machineID;
@@ -1098,9 +1115,10 @@ action(splitWrReqDataToReq, "swrr",
     tbe.peerC2CG := in_msg.c2cSrcGateway;
     tbe.localSrcID := machineID;
     assignTxnID(tbe);
-    txnKeyTable.bindC2CIn(tbe.remoteTxnID, tbeKey(tbe));
+    txnKeyTable.bindC2CInScoped(tbe.peerC2CG, tbe.remoteTxnID,
+                  address, tbeKey(tbe));
     txnKeyTable.bindLocal(mapAddressToDownstreamMachine(address), tbe.txnID,
-          tbeKey(tbe));
+                address, tbeKey(tbe));
     txnKeyTable.bindLocalTxn(tbe.txnID, tbeKey(tbe));
     tbe.isWrite := true;
     // Buffer the data for later forwarding after DBID

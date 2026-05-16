@@ -50,11 +50,13 @@ class C2CTxnKeyTable
     {
         MachineID src;
         Addr txnId;
+        Addr addr;
 
         bool
         operator==(const LocalKey &other) const
         {
-            return src == other.src && txnId == other.txnId;
+            return src == other.src && txnId == other.txnId &&
+                   addr == other.addr;
         }
     };
 
@@ -64,7 +66,33 @@ class C2CTxnKeyTable
         operator()(const LocalKey &key) const
         {
             return std::hash<MachineID>()(key.src) ^
-                   (std::hash<Addr>()(key.txnId) << 1);
+                   (std::hash<Addr>()(key.txnId) << 1) ^
+                   (std::hash<Addr>()(key.addr) << 2);
+        }
+    };
+
+    struct C2CInKey
+    {
+        MachineID peer;
+        Addr txnId;
+        Addr addr;
+
+        bool
+        operator==(const C2CInKey &other) const
+        {
+            return peer == other.peer && txnId == other.txnId &&
+                   addr == other.addr;
+        }
+    };
+
+    struct C2CInKeyHash
+    {
+        std::size_t
+        operator()(const C2CInKey &key) const
+        {
+            return std::hash<MachineID>()(key.peer) ^
+                   (std::hash<Addr>()(key.txnId) << 1) ^
+                   (std::hash<Addr>()(key.addr) << 2);
         }
     };
 
@@ -90,39 +118,39 @@ class C2CTxnKeyTable
     }
 
     void
-    bindC2CIn(Addr txn_id, Addr key)
+    bindC2CInScoped(MachineID peer, Addr txn_id, Addr addr, Addr key)
     {
-        m_c2cInKeys[txn_id] = key;
+        m_c2cInScopedKeys[C2CInKey{peer, txn_id, addr}] = key;
     }
 
     bool
-    hasC2CIn(Addr txn_id) const
+    hasC2CInScoped(MachineID peer, Addr txn_id, Addr addr) const
     {
-        return contains(m_c2cInKeys, txn_id);
+        return contains(m_c2cInScopedKeys, C2CInKey{peer, txn_id, addr});
     }
 
     Addr
-    lookupC2CIn(Addr txn_id) const
+    lookupC2CInScoped(MachineID peer, Addr txn_id, Addr addr) const
     {
-        return lookup(m_c2cInKeys, txn_id);
+        return lookup(m_c2cInScopedKeys, C2CInKey{peer, txn_id, addr});
     }
 
     void
-    bindLocal(MachineID src, Addr txn_id, Addr key)
+    bindLocal(MachineID src, Addr txn_id, Addr addr, Addr key)
     {
-        m_localKeys[LocalKey{src, txn_id}] = key;
+        m_localKeys[LocalKey{src, txn_id, addr}] = key;
     }
 
     bool
-    hasLocal(MachineID src, Addr txn_id) const
+    hasLocal(MachineID src, Addr txn_id, Addr addr) const
     {
-        return contains(m_localKeys, LocalKey{src, txn_id});
+        return contains(m_localKeys, LocalKey{src, txn_id, addr});
     }
 
     Addr
-    lookupLocal(MachineID src, Addr txn_id) const
+    lookupLocal(MachineID src, Addr txn_id, Addr addr) const
     {
-        return lookup(m_localKeys, LocalKey{src, txn_id});
+        return lookup(m_localKeys, LocalKey{src, txn_id, addr});
     }
 
     void
@@ -172,7 +200,7 @@ class C2CTxnKeyTable
     eraseKey(Addr key)
     {
         eraseByValue(m_c2cOutKeys, key);
-        eraseByValue(m_c2cInKeys, key);
+        eraseByValue(m_c2cInScopedKeys, key);
         eraseByValue(m_localKeys, key);
         eraseByValue(m_localTxnKeys, key);
 
@@ -218,7 +246,7 @@ class C2CTxnKeyTable
     }
 
     std::unordered_map<Addr, Addr> m_c2cOutKeys;
-    std::unordered_map<Addr, Addr> m_c2cInKeys;
+    std::unordered_map<C2CInKey, Addr, C2CInKeyHash> m_c2cInScopedKeys;
     std::unordered_map<Addr, Addr> m_localTxnKeys;
     std::unordered_map<LocalKey, Addr, LocalKeyHash> m_localKeys;
     std::unordered_map<Addr, std::vector<Addr>> m_addrKeys;
