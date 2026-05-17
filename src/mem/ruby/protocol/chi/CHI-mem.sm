@@ -553,6 +553,7 @@ machine(MachineType:Memory, "Memory controller interface") :
       out_msg.addr := address;
       out_msg.type := CHIResponseType:ReadReceipt;
       out_msg.responder := machineID;
+      out_msg.txnId := tbe.txnId;
       out_msg.Destination.add(tbe.requestor);
     }
     // also send different type of data when ready

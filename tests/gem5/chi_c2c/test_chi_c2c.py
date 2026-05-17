@@ -85,6 +85,37 @@ for name, test_type, requests in c2c_tests:
     )
 
 
+cross_snf_tests = [
+    (
+        "chi-c2c-cross-snf-dmt",
+        "SeriesGets",
+        40,
+        ["--cross-snf", "--enable-dmt-early-dealloc"],
+    ),
+    ("chi-c2c-cross-snf-dwt", "SeriesGetx", 40, ["--cross-snf"]),
+]
+
+for name, test_type, requests, extra_args in cross_snf_tests:
+    gem5_verify_config(
+        name=name,
+        fixtures=(),
+        verifiers=(),
+        config=config,
+        config_args=[
+            "--test-type",
+            test_type,
+            "--requests",
+            str(requests),
+            "--topology=Crossbar",
+        ]
+        + extra_args,
+        valid_isas=(constants.all_compiled_tag,),
+        valid_hosts=constants.supported_hosts,
+        protocol="CHI",
+        length=constants.long_tag,
+    )
+
+
 ruby_mem_long_tests = [
     (
         "chi-c2c-ruby-mem-r2-long",

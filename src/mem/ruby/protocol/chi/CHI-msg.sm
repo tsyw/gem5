@@ -135,6 +135,10 @@ structure(CHIRequestMsg, desc="", interface="Message") {
   MachineID origSrcID,     desc="Original SrcID before C2CG rewrite";
   Addr origTxnId,          default="0", desc="Original TxnID before C2CG rewrite";
   MachineID c2cSrcGateway, desc="C2CG that sent this message";
+    bool hasC2CEgressType,  default="false",
+      desc="True if c2cEgressType names the peer-side egress class";
+    MachineType c2cEgressType,
+      desc="Peer-side MachineType selected by the upstream router";
   // Remote sharer targeting: set by HN on snoops to C2CGs so the
   // gateway knows which specific remote caches to snoop.
   bool hasRmtDest,         default="false", desc="True if rmtDest is valid";
@@ -247,6 +251,10 @@ structure(CHIDataMsg, desc="", interface="Message") {
   // C2C tracking fields
   bool isC2C,              default="false", desc="True if data is part of C2C transaction";
   MachineID c2cSrcGateway, desc="C2CG that should receive this data";
+    bool hasC2CEgressType,  default="false",
+      desc="True if c2cEgressType names the peer-side egress class";
+    MachineType c2cEgressType,
+      desc="Peer-side MachineType selected by the upstream router";
   // WritePush: original request opcode embedded in WrReqDataS/L
   CHIRequestType wrReqType, default="CHIRequestType_null",
       desc="Original write request type for WritePush";

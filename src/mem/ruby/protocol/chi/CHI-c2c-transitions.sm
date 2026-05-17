@@ -171,13 +171,34 @@ transition(REQ_ACTIVE, RspIn_RespSepData_In, ACTIVE_WAIT_SEP) {
   popRspInQueue;
 }
 
-// ReadReceipt: outbound only (from C2C RX, forward to local RN)
-// HR-6a: ReadReceipt must be forwarded to local RN
-transition({REQ_ACTIVE, ACTIVE_WAIT_SEP},
-           RspIn_ReadReceipt_Out) {
+// ReadReceipt is the response half of ReadNoSnpSep. It may arrive before or
+// after DataSepResp and is forwarded while the TBE waits for the data half.
+transition(REQ_ACTIVE, RspIn_ReadReceipt_Out, ACTIVE_WAIT_SEP) {
   forwardC2CRspToLocal;
   returnRspCredit;
   popC2CRxRspQueue;
+}
+
+transition(REQ_ACTIVE, RspIn_ReadReceipt_In, ACTIVE_WAIT_SEP) {
+  consumeRspCredit;
+  forwardLocalRspToC2C;
+  popRspInQueue;
+}
+
+transition(ACTIVE_WAIT_SEP, RspIn_ReadReceipt_Out, COMPACK_ACTIVE) {
+  clearExpectingComp;
+  forwardC2CRspToLocal;
+  returnRspCredit;
+  checkTxnComplete;
+  popC2CRxRspQueue;
+}
+
+transition(ACTIVE_WAIT_SEP, RspIn_ReadReceipt_In, COMPACK_ACTIVE) {
+  clearExpectingComp;
+  consumeRspCredit;
+  forwardLocalRspToC2C;
+  checkTxnComplete;
+  popRspInQueue;
 }
 
 // CompAck can arrive before this gateway observes the response/data half,

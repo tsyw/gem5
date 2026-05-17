@@ -1596,7 +1596,9 @@ action(Send_ReadNoSnp, desc="") {
 
   enqueue(reqOutPort, CHIRequestMsg, request_latency) {
     prepareRequest(tbe, CHIRequestType:ReadNoSnp, out_msg);
-    out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
+    MachineID dest := mapAddressToDownstreamMachine(tbe.addr);
+    out_msg.Destination.add(dest);
+    setC2CEgressTypeIfNeeded(out_msg, dest, MachineType:Memory);
     out_msg.dataToFwdRequestor := false;
     allowRequestRetry(tbe, out_msg);
   }
@@ -1615,7 +1617,9 @@ action(Send_ReadNoSnpDMT, desc="") {
 
   enqueue(reqOutPort, CHIRequestMsg, request_latency) {
     prepareRequest(tbe, req, out_msg);
-    out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
+    MachineID dest := mapAddressToDownstreamMachine(tbe.addr);
+    out_msg.Destination.add(dest);
+    setC2CEgressTypeIfNeeded(out_msg, dest, MachineType:Memory);
     out_msg.dataToFwdRequestor := true;
     allowRequestRetry(tbe, out_msg);
   }
@@ -1773,7 +1777,9 @@ action(Send_WriteNoSnp, desc="") {
 
   enqueue(reqOutPort, CHIRequestMsg, request_latency) {
     prepareRequest(tbe, CHIRequestType:WriteNoSnp, out_msg);
-    out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
+    MachineID dest := mapAddressToDownstreamMachine(tbe.addr);
+    out_msg.Destination.add(dest);
+    setC2CEgressTypeIfNeeded(out_msg, dest, MachineType:Memory);
     allowRequestRetry(tbe, out_msg);
   }
   // allow to expect this on top of data coming from upstream;
@@ -1792,7 +1798,9 @@ action(Send_WriteNoSnp_Partial, desc="") {
     prepareRequest(tbe, CHIRequestType:WriteNoSnpPtl, out_msg);
     out_msg.accAddr := tbe.accAddr;
     out_msg.accSize := tbe.accSize;
-    out_msg.Destination.add(mapAddressToDownstreamMachine(tbe.addr));
+    MachineID dest := mapAddressToDownstreamMachine(tbe.addr);
+    out_msg.Destination.add(dest);
+    setC2CEgressTypeIfNeeded(out_msg, dest, MachineType:Memory);
     allowRequestRetry(tbe, out_msg);
   }
   // allow to expect this on top of data coming from upstream;

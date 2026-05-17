@@ -271,7 +271,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     RspIn_DBIDResp_In,           desc="DBIDResp from local HN (inbound)";
     RspIn_CompAck_Out,           desc="CompAck from local RN via NoC (outbound: fwd to C2C)";
     RspIn_CompAck_In,            desc="CompAck from remote RN via C2C (inbound: fwd to HN)";
-    RspIn_ReadReceipt_Out,       desc="ReadReceipt from C2C RX (outbound only)";
+    RspIn_ReadReceipt_Out,       desc="ReadReceipt from C2C RX (outbound)";
+    RspIn_ReadReceipt_In,        desc="ReadReceipt from local SNF (inbound)";
     RspIn_RespSepData_Out,       desc="RespSepData from C2C RX (outbound)";
     RspIn_RespSepData_In,        desc="RespSepData from local HN (inbound)";
     RspIn_SepReadResp_Done_Out,  desc="RespSepData completes separated outbound read";
@@ -354,11 +355,14 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     bool isAtomic,              desc="Is atomic transaction";
     MachineID localSrcID,       desc="Local source MachineID";
     MachineID localFwdRequestor, desc="Original forward requestor from local ingress";
+    MachineID localDest,        desc="Local destination selected by route metadata";
     Addr localTxnID,            desc="Local TxnID";
     Addr txnID,                 desc="TxnID used when forwarding to local HN";
     MachineID remoteSrcID,      desc="Remote source MachineID";
     Addr remoteTxnID,           desc="Remote TxnID";
     MachineID peerC2CG,         desc="Peer C2CG on remote chip";
+    bool hasC2CEgressType,      desc="Outbound request carries C2C egress type";
+    MachineType c2cEgressType,  desc="Outbound C2C egress type";
     bool expectingData,         desc="Waiting for separated read data";
     bool expectingComp,         desc="Waiting for separated read response";
     int pendingSnpResps,        desc="Outstanding snoop responses";
@@ -381,6 +385,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     bool compAckDone,           desc="CompAck forwarded, awaiting data";
     int pendingCompAcks,        desc="Requester CompAcks still expected";
     NetDest readFanoutDests,    desc="Local destinations for merged reads";
+    bool dataToFwdRequestor,     desc="Forward response data to fwdRequestor";
     bool isOutbound,            desc="True=outbound (local→remote), false=inbound";
   }
 

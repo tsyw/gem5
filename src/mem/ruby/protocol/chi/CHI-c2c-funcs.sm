@@ -39,6 +39,7 @@ void set_tbe(TBE b);
 void unset_tbe();
 void wakeUpAllBuffers(Addr a);
 MachineID mapAddressToDownstreamMachine(Addr addr);
+MachineID mapAddressToDownstreamMachine(Addr addr, MachineType mtype);
 NetDest allUpstreamDest();
 NetDest allPeerUpstreamDest();
 
@@ -189,7 +190,8 @@ Event reqToEvent(CHIRequestType type) {
     return Event:OutReq_ReadUnique;
   } else if (type == CHIRequestType:ReadOnce) {
     return Event:OutReq_ReadOnce;
-  } else if (type == CHIRequestType:ReadNoSnp) {
+  } else if ((type == CHIRequestType:ReadNoSnp) ||
+             (type == CHIRequestType:ReadNoSnpSep)) {
     return Event:OutReq_ReadNoSnp;
   } else if (type == CHIRequestType:ReadNotSharedDirty) {
     return Event:OutReq_ReadNotSharedDirty;
@@ -398,6 +400,28 @@ bool writeCompRequired(CHIRequestType type) {
   return type != CHIRequestType:WriteBackFull;
 }
 
+MachineID localRequestDest(CHIRequestMsg msg, Addr addr) {
+  if (msg.hasC2CEgressType) {
+    return mapAddressToDownstreamMachine(addr, msg.c2cEgressType);
+  }
+  return mapAddressToDownstreamMachine(addr, MachineType:Cache);
+}
+
+MachineID localRequestDest(CHIDataMsg msg, Addr addr) {
+  if (msg.hasC2CEgressType) {
+    return mapAddressToDownstreamMachine(addr, msg.c2cEgressType);
+  }
+  return mapAddressToDownstreamMachine(addr, MachineType:Cache);
+}
+
+CHIDataType localWriteDataType(CHIRequestType type) {
+  if ((type == CHIRequestType:WriteNoSnp) ||
+      (type == CHIRequestType:WriteNoSnpPtl)) {
+    return CHIDataType:NCBWrData;
+  }
+  return CHIDataType:CBWrData_I;
+}
+
 // Determine if a request type is dataless
 bool isDatalessRequest(CHIRequestType type) {
   if ((type == CHIRequestType:CleanUnique) ||
@@ -408,6 +432,10 @@ bool isDatalessRequest(CHIRequestType type) {
 }
 
 bool needsRequesterCompAck(CHIRequestType type) {
+  if ((type == CHIRequestType:ReadNoSnp) ||
+      (type == CHIRequestType:ReadNoSnpSep)) {
+    return false;
+  }
   if (isReadRequest(type) || type == CHIRequestType:CleanUnique) {
     return true;
   }
@@ -450,6 +478,16 @@ NetDest localResponseDest(TBE tbe) {
     dest := tbe.readFanoutDests;
   } else {
     dest.add(tbe.localSrcID);
+  }
+  return dest;
+}
+
+NetDest localDataDest(TBE tbe) {
+  NetDest dest;
+  if (tbe.dataToFwdRequestor) {
+    dest.add(tbe.localFwdRequestor);
+  } else {
+    dest := localResponseDest(tbe);
   }
   return dest;
 }
@@ -532,6 +570,8 @@ void clearTBEDefaults(TBE tbe) {
   tbe.compAckDone := false;
   tbe.pendingCompAcks := 0;
   tbe.readFanoutDests.clear();
+  tbe.dataToFwdRequestor := false;
+  tbe.hasC2CEgressType := false;
 }
 
 void assignTxnID(TBE tbe) {
@@ -581,6 +621,8 @@ Event respToEventIn(CHIResponseType type) {
     return Event:RspIn_DBIDResp_In;
   } else if (type == CHIResponseType:CompAck) {
     return Event:RspIn_CompAck_In;
+  } else if (type == CHIResponseType:ReadReceipt) {
+    return Event:RspIn_ReadReceipt_In;
   } else if (type == CHIResponseType:RespSepData) {
     return Event:RspIn_RespSepData_In;
   } else {

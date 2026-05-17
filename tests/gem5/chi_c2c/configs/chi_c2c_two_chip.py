@@ -122,6 +122,7 @@ def _build_chip(
     hnf_cache_cls,
     addr_range,
     remote_range,
+    c2cg_range,
     full_range,
     interleave_idx,
     num_c2cgs=1,
@@ -154,13 +155,13 @@ def _build_chip(
 
     snf = CHI_SNF_MainMem(ruby_system, None, None)
 
-    # Create num_c2cgs C2CGs, each handling a hash-selected remote partition.
-    remote_partitions = _partition_range(
-        remote_range,
+    # Create num_c2cgs C2CGs, each handling a hash-selected partition.
+    c2cg_partitions = _partition_range(
+        c2cg_range,
         num_c2cgs,
         cache_line_size.bit_length() - 1,
     )
-    c2cgs = [CHI_C2CG(ruby_system, [part]) for part in remote_partitions]
+    c2cgs = [CHI_C2CG(ruby_system, [part]) for part in c2cg_partitions]
     all_c2cg_cntrls = []
     upstream_cache_destinations = [ctrl.version for ctrl in all_rnf_cntrls]
     for c2cg in c2cgs:
@@ -210,6 +211,7 @@ def build_two_chip_system(
     num_c2cgs=1,
     txq_size=0,
     num_tbes=32,
+    cross_snf=False,
 ):
     """
     Build a two-chip CHI system with C2C gateways.
@@ -227,6 +229,8 @@ def build_two_chip_system(
                    (c2cg_i on chip0 ↔ c2cg_i on chip1) handles a
                    partition of the remote address range.
         txq_size: Max buffered granules in bridge TX queues (0 = unlimited).
+        cross_snf: Route each HNF's SNF-side traffic through the peer chip's
+               SNF over C2CG. This is for HNF-to-SNF DMT/DWT coverage.
 
     Returns:
         (network_nodes, network_cntrls, all_cntrls,
@@ -274,6 +278,7 @@ def build_two_chip_system(
     c2cgs = []
 
     for chip_cpus, addr_range, remote_range, idx in chip_args:
+        c2cg_range = addr_range if cross_snf else remote_range
         (
             chip_rnfs,
             hnf,
@@ -295,6 +300,7 @@ def build_two_chip_system(
             HNFCache,
             addr_range,
             remote_range,
+            c2cg_range,
             full_range,
             idx,
             num_c2cgs=num_c2cgs,
@@ -350,16 +356,30 @@ def build_two_chip_system(
         all_c2cg_cntrls = []
         for c2cg in c2cgs[i]:
             all_c2cg_cntrls.extend(c2cg.getAllControllers())
-        downstream = hnfs[i].getAllControllers() + all_c2cg_cntrls
+        if cross_snf:
+            downstream = hnfs[i].getAllControllers()
+            hnf_downstream = all_c2cg_cntrls
+        else:
+            downstream = hnfs[i].getAllControllers() + all_c2cg_cntrls
+            hnf_downstream = snfs[i].getAllControllers()
         for rnf in rnfs[i]:
             rnf.setDownstream(downstream)
-        hnfs[i].setDownstream(snfs[i].getAllControllers())
-        # Each C2CG forwards inbound remote requests to the local HNF
+        hnfs[i].setDownstream(hnf_downstream)
+        if cross_snf:
+            c2cg_downstream = snfs[i].getAllControllers()
+        else:
+            c2cg_downstream = (
+                hnfs[i].getAllControllers() + snfs[i].getAllControllers()
+            )
+        # In normal mode a C2CG can egress to either local HNF or SNF. The
+        # protocol route hint comes from the upstream sender, while cross-SNF
+        # mode only drives HNF-to-SNF traffic and keeps only the SNF downstream
+        # to avoid an HNF<->C2CG SimObject reference cycle.
         for c2cg in c2cgs[i]:
             c2cg.getAllControllers()[0].peer_upstream_cache_destinations = (
                 list(peer_cache_destinations[1 - i])
             )
-            c2cg.setDownstream(hnfs[i].getAllControllers())
+            c2cg.setDownstream(c2cg_downstream)
 
     # Data message size
     for cntrl in all_cntrls:

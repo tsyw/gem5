@@ -682,6 +682,14 @@ void prepareRequest(TBE tbe, CHIRequestType type, CHIRequestMsg & out_msg) {
   assert(tbe.txnId != static_cast(Addr, "value", -1));
 }
 
+void setC2CEgressTypeIfNeeded(CHIRequestMsg & out_msg, MachineID dest,
+                              MachineType egressType) {
+  if (machineIDToMachineType(dest) == MachineType:CHI_C2C) {
+    out_msg.hasC2CEgressType := true;
+    out_msg.c2cEgressType := egressType;
+  }
+}
+
 // Replace remote sharers in snoop Destination with their C2CG gateways.
 // Sets rmtDest so C2CG knows which remote RNs to actually snoop.
 // Must be called AFTER Destination is populated from dir_sharers.

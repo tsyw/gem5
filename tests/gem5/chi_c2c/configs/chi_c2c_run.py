@@ -149,6 +149,16 @@ parser.add_argument(
     action="store_true",
     help="Enable C2CG same-address ReadShared merge/fanout.",
 )
+parser.add_argument(
+    "--cross-snf",
+    action="store_true",
+    help="Place each SNF behind the peer C2CG to test HNF-to-SNF flows.",
+)
+parser.add_argument(
+    "--enable-dmt-early-dealloc",
+    action="store_true",
+    help="Enable HNF ReadNoSnpSep/ReadReceipt DMT early deallocation.",
+)
 
 args = parser.parse_args()
 
@@ -161,6 +171,7 @@ if args.link_bw_gbps > 0.0:
 
 # Total CPUs = 2 chips * cpus_per_chip
 args.num_cpus = 2 * args.cpus_per_chip
+generator_num_cpus = args.cpus_per_chip if args.cross_snf else args.num_cpus
 # Force 2 dirs so setup_memory_controllers handles 2 SNFs
 args.num_dirs = 2
 # Use Crossbar topology for flat two-chip network
@@ -168,24 +179,24 @@ args.topology = "Crossbar"
 
 if args.test_type == "SeriesGetx":
     generator = SeriesRequestGenerator(
-        num_cpus=args.num_cpus,
+        num_cpus=generator_num_cpus,
         percent_writes=100,
         issue_window=args.issue_window,
     )
 elif args.test_type == "SeriesGets":
     generator = SeriesRequestGenerator(
-        num_cpus=args.num_cpus,
+        num_cpus=generator_num_cpus,
         percent_writes=0,
         issue_window=args.issue_window,
     )
 elif args.test_type == "SeriesGetMixed":
     generator = SeriesRequestGenerator(
-        num_cpus=args.num_cpus,
+        num_cpus=generator_num_cpus,
         percent_writes=args.percent_writes,
         issue_window=args.issue_window,
     )
 elif args.test_type == "Invalidate":
-    generator = InvalidateGenerator(num_cpus=args.num_cpus)
+    generator = InvalidateGenerator(num_cpus=generator_num_cpus)
 else:
     m5.fatal("Unknown test type: %s" % args.test_type)
 
@@ -238,7 +249,12 @@ system.ruby.network = SimpleNetwork(
     container_latency=args.container_latency,
     num_c2cgs=args.num_c2cgs,
     txq_size=args.txq_size,
+    cross_snf=args.cross_snf,
 )
+
+for hnf in system.ruby.hnf:
+    for controller in hnf.getAllControllers():
+        controller.enable_DMT_early_dealloc = args.enable_dmt_early_dealloc
 
 for c2cg_list in c2cg_pair:
     for c2cg in c2cg_list:
@@ -260,14 +276,16 @@ system.ruby.network.setup_buffers()
 
 # Set up DRAM backing for each SNF controller.
 # Unlike Ruby.setup_memory_controllers, we do NOT interleave across dirs.
-# Each chip's SNF covers its full chip address range (no interleaving).
+# In cross-SNF mode each chip's SNF backs the peer chip's home range.
 system.ruby.block_size_bytes = args.cacheline_size
 system.ruby.memory_size_bits = 48
 
 _mem_ctrls = []
-for i, (snf_cntrl, mem_range) in enumerate(
-    zip(mem_cntrls, [chip0_range, chip1_range])
-):
+if args.cross_snf:
+    mem_ranges = [chip1_range, chip0_range]
+else:
+    mem_ranges = [chip0_range, chip1_range]
+for i, (snf_cntrl, mem_range) in enumerate(zip(mem_cntrls, mem_ranges)):
     mem_type = ObjectList.mem_list.get(args.mem_type)
     dram_intf = MemConfig.create_mem_intf(
         mem_type,
