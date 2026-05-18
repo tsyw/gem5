@@ -198,8 +198,17 @@ parser.add_argument(
     metavar="N",
     help="Number of C2CG transaction TBEs per gateway",
 )
+parser.add_argument(
+    "--data-width",
+    type=int,
+    default=0,
+    metavar="BYTES",
+    help="Override CHI data channel width in bytes (0 = default).",
+)
 
 args = parser.parse_args()
+if args.data_width > 0:
+    NoC_Params.data_width = args.data_width
 topology = args.topology.upper()
 
 args.l1d_size = "256B"

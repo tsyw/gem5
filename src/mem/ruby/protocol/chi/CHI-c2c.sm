@@ -166,7 +166,13 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     COMP_ONLY_DL_ACTIVE, AccessPermission:Busy,
       desc="Comp-only dataless request waiting for terminal Comp";
     ATOMIC_ACTIVE,     AccessPermission:Busy,
-        desc="Atomic active, waiting for response (either direction)";
+      desc="Legacy atomic active state (kept for retry compatibility)";
+    ATOMIC_WAIT_DBID,  AccessPermission:Busy,
+      desc="Atomic request sent, waiting for DBIDResp/CompDBIDResp";
+    ATOMIC_WAIT_DATA,  AccessPermission:Busy,
+      desc="Atomic DBID seen, waiting for requester NCBWrData";
+    ATOMIC_WAIT_COMP,  AccessPermission:Busy,
+      desc="Atomic data sent, waiting for Comp/CompData if needed";
 
     // Unified post-DBID write state. DBIDResp and Comp are unordered, so
     // this state may still be waiting for data, Comp, or both.
@@ -244,6 +250,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     OutSnp_DvmP1,                desc="SnpDvmOp_P1 from local MN";
     OutSnp_DvmP2,                desc="SnpDvmOp_P2 from local MN";
     InSnp_Deliver,               desc="Inbound snoop to deliver locally";
+    InSnp_DvmP1,                 desc="SnpDvmOp_P1 from peer C2CG";
+    InSnp_DvmP2,                 desc="SnpDvmOp_P2 from peer C2CG";
 
     // Response events — non-directional (used by DVM/snoop paths)
     RspIn_Comp,                  desc="Comp response received (DVM/legacy)";
@@ -378,6 +386,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     DataBlock dataBlk,          desc="Transaction data buffer";
     WriteMask dataBlkValid,     desc="Valid bytes in data buffer";
     int rxtxBytes,              desc="Bytes sent or received";
+    int dataBytesExpected,      desc="Bytes expected for data completion";
     bool compAckDone,           desc="CompAck forwarded, awaiting data";
     int pendingCompAcks,        desc="Requester CompAcks still expected";
     NetDest readFanoutDests,    desc="Local destinations for merged reads";

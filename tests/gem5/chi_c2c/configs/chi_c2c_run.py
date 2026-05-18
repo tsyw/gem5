@@ -55,6 +55,7 @@ from common import (
     Options,
 )
 from ruby import Ruby
+from ruby.CHI_config import NoC_Params
 
 try:
     _here = os.path.dirname(os.path.abspath(__file__))
@@ -159,8 +160,18 @@ parser.add_argument(
     action="store_true",
     help="Enable HNF ReadNoSnpSep/ReadReceipt DMT early deallocation.",
 )
+parser.add_argument(
+    "--data-width",
+    type=int,
+    default=0,
+    metavar="BYTES",
+    help="Override CHI data channel width in bytes (0 = default).",
+)
 
 args = parser.parse_args()
+
+if args.data_width > 0:
+    NoC_Params.data_width = args.data_width
 
 import math
 

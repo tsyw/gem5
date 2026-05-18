@@ -71,6 +71,9 @@ in_port(c2cRxRspInPort, CHIResponseMsg, c2cRxRsp, rank=12,
       if (isSnpRespType(in_msg.type)) {
         tbe := snpTBEs[in_msg.addr];
         if (is_valid(tbe) == false) {
+          tbe := dvmTBEs[in_msg.addr];
+        }
+        if (is_valid(tbe) == false) {
           tbe := lookupTBEByAddress(in_msg.addr);
         }
         if (is_valid(tbe) == false) {
@@ -155,10 +158,13 @@ in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
         }
         WriteMask combinedMask := tbe.dataBlkValid;
         combinedMask.orMask(in_msg.bitMask);
-        bool firstData := tbe.dataBlkValid.isEmpty();
-        bool finalData := combinedMask.isFull() &&
-          ((firstData && (tbe.pendingSnpResps == 1)) ||
-           ((firstData == false) && (tbe.pendingSnpResps == 0)));
+        bool firstResponderData :=
+          tbe.snpDataRespondersSeen.isElement(in_msg.responder) == false;
+        int pendingAfter := tbe.pendingSnpResps;
+        if ((firstResponderData == true) && (pendingAfter > 0)) {
+          pendingAfter := pendingAfter - 1;
+        }
+        bool finalData := combinedMask.isFull() && (pendingAfter == 0);
         if (finalData) {
           trigger(Event:DatIn_SnpRespData_Out, in_msg.addr, tbe);
         } else {
@@ -258,7 +264,8 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
               } else if (tbe.retryState == State:COMP_ONLY_DL_ACTIVE) {
                 trigger(Event:PCrdGrantRetryCompOnlyDatalessFromHN,
                         in_msg.addr, tbe);
-              } else if (tbe.retryState == State:ATOMIC_ACTIVE) {
+              } else if ((tbe.retryState == State:ATOMIC_ACTIVE) ||
+                         (tbe.retryState == State:ATOMIC_WAIT_DBID)) {
                 trigger(Event:PCrdGrantRetryAtomicFromHN, in_msg.addr, tbe);
               } else if (tbe.retryState == State:WR_PUSH_FWD_WAIT_DBID) {
                 trigger(Event:PCrdGrantRetryWritePushFromHN,
@@ -485,14 +492,35 @@ in_port(c2cRxSnpInPort, CHIRequestMsg, c2cRxSnp, rank=7) {
     if (coherencyEnabled() == false) {
       c2cRxSnpInPort.recycle(clockEdge(),
                               cyclesToTicks(stall_recycle_lat));
-    } else if (storSnpTBEs.areNSlotsAvailable(1) == false) {
-      c2cRxSnpInPort.recycle(clockEdge(),
-                              cyclesToTicks(stall_recycle_lat));
     } else {
-      storSnpTBEs.incrementReserved();
       peek(c2cRxSnpInPort, CHIRequestMsg) {
-        trigger(Event:InSnp_Deliver, in_msg.addr,
-                snpTBEs[in_msg.addr]);
+        if (isDvmSnoop(in_msg.type)) {
+          if (isDvmP1(in_msg.type)) {
+            if (storDvmTBEs.areNSlotsAvailable(1) == false) {
+              c2cRxSnpInPort.recycle(clockEdge(),
+                                      cyclesToTicks(stall_recycle_lat));
+            } else {
+              storDvmTBEs.incrementReserved();
+              trigger(Event:InSnp_DvmP1, in_msg.addr,
+                      dvmTBEs[in_msg.addr]);
+            }
+          } else {
+            TBE dvm_tbe := dvmTBEs[in_msg.addr];
+            if (is_valid(dvm_tbe) == false) {
+              c2cRxSnpInPort.recycle(clockEdge(),
+                                      cyclesToTicks(stall_recycle_lat));
+            } else {
+              trigger(Event:InSnp_DvmP2, in_msg.addr, dvm_tbe);
+            }
+          }
+        } else if (storSnpTBEs.areNSlotsAvailable(1) == false) {
+          c2cRxSnpInPort.recycle(clockEdge(),
+                                  cyclesToTicks(stall_recycle_lat));
+        } else {
+          storSnpTBEs.incrementReserved();
+          trigger(Event:InSnp_Deliver, in_msg.addr,
+                  snpTBEs[in_msg.addr]);
+        }
       }
     }
   }
@@ -500,7 +528,7 @@ in_port(c2cRxSnpInPort, CHIRequestMsg, c2cRxSnp, rank=7) {
 
 // Rank 6: NoC Snoop (from local HN for remote targets, or MN for DVM)
 // Credit check: outbound SNP requires C2C SNP credit (Phase 3)
-// DVM snoops: P1 needs dvmTBE slot, P2 needs REQ credit (Phase 4)
+// DVM snoops: P1 allocates a dvmTBE, P2 uses SNP credit for forwarding.
 in_port(snpInPort, CHIRequestMsg, snpIn, rank=6) {
   if (snpInPort.isReady(clockEdge())) {
     printResources();
@@ -510,7 +538,7 @@ in_port(snpInPort, CHIRequestMsg, snpIn, rank=6) {
           snpInPort.recycle(clockEdge(),
                             cyclesToTicks(stall_recycle_lat));
         } else if (isDvmP1(in_msg.type)) {
-          // P1: allocate dvmTBE, no C2C credit needed yet
+          // P1: allocate dvmTBE and forward the first SnpDVM flit.
           // Reserve extra slot for sync if this is non-sync (T-010)
           int dvmSlotsNeeded := 1;
           if (isDvmSyncType(in_msg.type) == false) {
@@ -519,15 +547,18 @@ in_port(snpInPort, CHIRequestMsg, snpIn, rank=6) {
           if (storDvmTBEs.areNSlotsAvailable(dvmSlotsNeeded) == false) {
             snpInPort.recycle(clockEdge(),
                               cyclesToTicks(stall_recycle_lat));
+          } else if (creditMgr.hasSnpCredit() == false) {
+            creditMgr.recordStall(1);  // CLS_SNP=1
+            snpInPort.recycle(clockEdge(),
+                              cyclesToTicks(stall_recycle_lat));
           } else {
             storDvmTBEs.incrementReserved();
             trigger(Event:OutSnp_DvmP1, in_msg.addr,
                     dvmTBEs[in_msg.addr]);
           }
         } else {
-          // P2: need REQ credit to send DvmOp across C2C
-          if (creditMgr.hasReqCredit(0) == false) {
-            creditMgr.recordStall(0);  // CLS_REQ=0
+          if (creditMgr.hasSnpCredit() == false) {
+            creditMgr.recordStall(1);  // CLS_SNP=1
             snpInPort.recycle(clockEdge(),
                               cyclesToTicks(stall_recycle_lat));
           } else {

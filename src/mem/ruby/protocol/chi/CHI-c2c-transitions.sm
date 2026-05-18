@@ -46,7 +46,8 @@
 // I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
 // WR_ACTIVE_DBID, WR_WAIT_COMP,
 // COMPACK_ACTIVE, COMPACK_DL_ACTIVE,
-// COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE,
+// COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE, ATOMIC_WAIT_DBID,
+// ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP,
 // RETRY_WAIT,
 // SNP_WAIT_RESP,
 // DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
@@ -60,6 +61,7 @@ transition({I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
             WR_ACTIVE_DBID, WR_WAIT_COMP,
             COMPACK_ACTIVE, COMPACK_DL_ACTIVE,
             COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE,
+            ATOMIC_WAIT_DBID, ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP,
             RETRY_WAIT,
             SNP_WAIT_RESP,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
@@ -73,6 +75,7 @@ transition({I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
             WR_ACTIVE_DBID, WR_WAIT_COMP,
             COMPACK_ACTIVE, COMPACK_DL_ACTIVE,
             COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE,
+            ATOMIC_WAIT_DBID, ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP,
             RETRY_WAIT,
             SNP_WAIT_RESP,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
@@ -317,7 +320,7 @@ transition(COMPACK_ACTIVE, CompleteTxn, I) {
 // order; tbe.retryState carries the state to resume after PCrdGrant.
 transition({REQ_ACTIVE, WR_ACTIVE_DBID, COMPACK_DL_ACTIVE,
             COMP_ONLY_DL_ACTIVE,
-            ATOMIC_ACTIVE, WR_PUSH_FWD_WAIT_DBID},
+            ATOMIC_ACTIVE, ATOMIC_WAIT_DBID, WR_PUSH_FWD_WAIT_DBID},
            RetryAckFromHN, RETRY_WAIT) {
   saveRetryState;
   markRetryPending;
@@ -326,7 +329,7 @@ transition({REQ_ACTIVE, WR_ACTIVE_DBID, COMPACK_DL_ACTIVE,
 
 transition({REQ_ACTIVE, WR_ACTIVE_DBID, COMPACK_DL_ACTIVE,
             COMP_ONLY_DL_ACTIVE,
-            ATOMIC_ACTIVE, WR_PUSH_FWD_WAIT_DBID},
+            ATOMIC_ACTIVE, ATOMIC_WAIT_DBID, WR_PUSH_FWD_WAIT_DBID},
            EarlyPCrdGrantFromHN) {
   recordPCrdGrant;
   popRspInQueue;
@@ -334,7 +337,7 @@ transition({REQ_ACTIVE, WR_ACTIVE_DBID, COMPACK_DL_ACTIVE,
 
 transition({REQ_ACTIVE, WR_ACTIVE_DBID, COMPACK_DL_ACTIVE,
             COMP_ONLY_DL_ACTIVE,
-            ATOMIC_ACTIVE, WR_PUSH_FWD_WAIT_DBID},
+            ATOMIC_ACTIVE, ATOMIC_WAIT_DBID, WR_PUSH_FWD_WAIT_DBID},
            RetryAckAfterPCrdGrantFromHN) {
   markRetryPending;
   reissueRequest;
@@ -363,7 +366,7 @@ transition(RETRY_WAIT, PCrdGrantRetryCompOnlyDatalessFromHN,
   popRspInQueue;
 }
 
-transition(RETRY_WAIT, PCrdGrantRetryAtomicFromHN, ATOMIC_ACTIVE) {
+transition(RETRY_WAIT, PCrdGrantRetryAtomicFromHN, ATOMIC_WAIT_DBID) {
   reissueRequest;
   popRspInQueue;
 }
@@ -437,6 +440,7 @@ transition(RETRY_WAIT, RspIn_RetryCompAtomic_In, I) {
 }
 
 transition({WR_ACTIVE_DBID, WR_WAIT_COMP, COMPACK_ACTIVE,
+            ATOMIC_WAIT_DBID,
             WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
            PCrdGrantFromHN) {
   clearRetryState;
@@ -645,7 +649,7 @@ transition(COMP_ONLY_DL_ACTIVE, RspIn_Comp_In, I) {
 ////////////////////////////////////////////////////////////////////////////
 
 transition(I, {OutReq_AtomicStore, OutReq_AtomicLoad},
-           ATOMIC_ACTIVE) {
+           ATOMIC_WAIT_DBID) {
   allocateTBE;
   setOutbound;
   recordLocalIDs_fromReq;
@@ -655,7 +659,7 @@ transition(I, {OutReq_AtomicStore, OutReq_AtomicLoad},
 }
 
 // Inbound atomic flow
-transition(I, InReq_Atomic, ATOMIC_ACTIVE) {
+transition(I, InReq_Atomic, ATOMIC_WAIT_DBID) {
   allocateTBE;
   recordRemoteIDs_fromC2CReq;
   forwardC2CReqToLocal;
@@ -663,26 +667,89 @@ transition(I, InReq_Atomic, ATOMIC_ACTIVE) {
   popC2CRxReqQueue;
 }
 
-// AtomicNoReturn: Comp from remote (outbound, C2C RX RSP)
-transition(ATOMIC_ACTIVE, RspIn_Comp_Out, I) {
+transition(ATOMIC_WAIT_DBID, RspIn_DBIDResp_Out, ATOMIC_WAIT_DATA) {
+  bindLocalDBIDFromC2CRsp;
   forwardC2CRspToLocal;
   returnRspCredit;
-  deallocateTBE;
-  wakeUpStalled;
   popC2CRxRspQueue;
 }
 
-// AtomicNoReturn: Comp from local HN (inbound, NoC RSP)
-transition(ATOMIC_ACTIVE, RspIn_Comp_In, I) {
+transition(ATOMIC_WAIT_DBID, RspIn_DBIDResp_In, ATOMIC_WAIT_DATA) {
   consumeRspCredit;
   forwardLocalRspToC2C;
-  deallocateTBE;
-  wakeUpStalled;
   popRspInQueue;
 }
 
-// AtomicReturn: CompData from remote (outbound, C2C RX DAT)
-transition(ATOMIC_ACTIVE, DatIn_CompData_Out, I) {
+transition(ATOMIC_WAIT_DBID, RspIn_CompDBIDResp_Out, ATOMIC_WAIT_DATA) {
+  recordWriteComp;
+  bindLocalDBIDFromC2CRsp;
+  forwardC2CRspToLocal;
+  returnRspCredit;
+  popC2CRxRspQueue;
+}
+
+transition(ATOMIC_WAIT_DBID, RspIn_CompDBIDResp_In, ATOMIC_WAIT_DATA) {
+  recordWriteComp;
+  consumeRspCredit;
+  forwardLocalRspToC2C;
+  popRspInQueue;
+}
+
+// Atomic write data from local RN (outbound, NoC DAT -> C2C TX)
+transition(ATOMIC_WAIT_DATA, {DatIn_CBWrData_Out, DatIn_NCBWrData_Out},
+           ATOMIC_WAIT_COMP) {
+  trackDatFlit;
+  consumeDatCredit;
+  forwardDatToC2CTx;
+  checkWriteTxnComplete;
+  popDatInQueue;
+}
+
+// Atomic write data from remote (inbound, C2C RX DAT -> local HN)
+transition(ATOMIC_WAIT_DATA, {DatIn_CBWrData_In, DatIn_NCBWrData_In},
+           ATOMIC_WAIT_COMP) {
+  trackDatFlit;
+  forwardC2CWrDatToLocal;
+  returnDatCredit;
+  checkWriteTxnComplete;
+  popC2CRxDatQueue;
+}
+
+transition(ATOMIC_WAIT_COMP, {DatIn_CBWrData_Out, DatIn_NCBWrData_Out}) {
+  trackDatFlit;
+  consumeDatCredit;
+  forwardDatToC2CTx;
+  checkWriteTxnComplete;
+  popDatInQueue;
+}
+
+transition(ATOMIC_WAIT_COMP, {DatIn_CBWrData_In, DatIn_NCBWrData_In}) {
+  trackDatFlit;
+  forwardC2CWrDatToLocal;
+  returnDatCredit;
+  checkWriteTxnComplete;
+  popC2CRxDatQueue;
+}
+
+// AtomicNoReturn plain Comp may arrive after the data phase.
+transition({ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP}, RspIn_Comp_Out) {
+  recordWriteComp;
+  forwardC2CRspToLocal;
+  returnRspCredit;
+  checkWriteTxnComplete;
+  popC2CRxRspQueue;
+}
+
+transition({ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP}, RspIn_Comp_In) {
+  recordWriteComp;
+  consumeRspCredit;
+  forwardLocalRspToC2C;
+  checkWriteTxnComplete;
+  popRspInQueue;
+}
+
+// AtomicReturn terminal CompData arrives after requester data.
+transition(ATOMIC_WAIT_COMP, DatIn_CompData_Out, I) {
   forwardC2CDatToLocal;
   returnDatCredit;
   deallocateTBE;
@@ -690,8 +757,7 @@ transition(ATOMIC_ACTIVE, DatIn_CompData_Out, I) {
   popC2CRxDatQueue;
 }
 
-// AtomicReturn: CompData from local HN (inbound, NoC DAT)
-transition(ATOMIC_ACTIVE, DatIn_CompData_In, I) {
+transition(ATOMIC_WAIT_COMP, DatIn_CompData_In, I) {
   consumeDatCredit;
   forwardLocalDatToC2C;
   deallocateTBE;
@@ -699,18 +765,10 @@ transition(ATOMIC_ACTIVE, DatIn_CompData_In, I) {
   popDatInQueue;
 }
 
-// Atomic write data from local RN (outbound, NoC DAT -> C2C TX)
-transition(ATOMIC_ACTIVE, {DatIn_CBWrData_Out, DatIn_NCBWrData_Out}) {
-  consumeDatCredit;
-  forwardDatToC2CTx;
-  popDatInQueue;
-}
-
-// Atomic write data from remote (inbound, C2C RX DAT -> local HN)
-transition(ATOMIC_ACTIVE, {DatIn_CBWrData_In, DatIn_NCBWrData_In}) {
-  forwardC2CWrDatToLocal;
-  returnDatCredit;
-  popC2CRxDatQueue;
+transition(ATOMIC_WAIT_COMP, CompleteTxn, I) {
+  deallocateTBE;
+  wakeUpStalled;
+  popTriggerQueue;
 }
 
 ////////////////////////////////////////////////////////////////////////////
@@ -805,51 +863,43 @@ transition(SNP_WAIT_RESP, DatIn_SnpRespData_In, I) {
 }
 
 ////////////////////////////////////////////////////////////////////////////
-// DVM originator flow (Phase 4): local MN -> C2CG -> C2C -> remote MN
-// MN sends SnpDvmOp P1/P2 to C2CG; C2CG reconstructs DvmOp and
-// forwards using WritePull (req -> DBID -> NCBWrData -> Comp).
-// Uses dvmTBEs (separate table, non-directional events, always outbound).
-// Consume: REQ credit on DvmOp send, DAT credit on NCBWrData send
-// Return: RSP credit on C2C RX dequeue
+// DVM SnpDVM flow: local MN sends P1/P2 snoops to C2CG; C2CG forwards
+// P1/P2 over the C2C SNP channel and waits for one aggregate SnpResp_I
+// from the peer C2CG. RN-origin DvmOp requests are handled separately by
+// the normal DBID-gated write-style request path.
 ////////////////////////////////////////////////////////////////////////////
 
-// P1 from local MN -> buffer in dvmTBE
 transition(I, OutSnp_DvmP1, DVM_WAIT_P2) {
   allocateDvmTBE;
   recordDvmP1;
+  consumeSnpCredit;
+  forwardDvmSnpToC2C;
   popSnpInQueue;
 }
 
-// P2 from local MN -> reconstruct and send DvmOp across C2C
-transition(DVM_WAIT_P2, OutSnp_DvmP2, DVM_WAIT_DBID) {
-  consumeReqCredit;
-  sendDvmReqToC2C;
+transition(DVM_WAIT_P2, OutSnp_DvmP2, DVM_WAIT_COMP) {
+  consumeSnpCredit;
+  forwardDvmSnpToC2C;
   popSnpInQueue;
 }
 
-// DBIDResp from remote -> send NCBWrData
-transition(DVM_WAIT_DBID, RspIn_DBIDResp, DVM_WAIT_COMP) {
-  recordDvmPeerFromRsp;
-  consumeDatCredit;
-  sendDvmDataToC2C;
-  returnRspCredit;
-  popC2CRxRspQueue;
+transition(I, InSnp_DvmP1, DVM_WAIT_P2) {
+  allocateDvmTBE;
+  recordInboundDvmP1;
+  returnSnpCredit;
+  popC2CRxSnpQueue;
 }
 
-// CompDBIDResp from remote -> send data + complete immediately
-transition(DVM_WAIT_DBID, RspIn_CompDBIDResp, I) {
-  recordDvmPeerFromRsp;
-  consumeDatCredit;
-  sendDvmDataToC2C;
-  sendSnpRespIToMN;
-  returnRspCredit;
+transition(DVM_WAIT_P2, InSnp_DvmP2, I) {
+  consumeRspCredit;
+  sendDvmSnpRespToC2C;
+  returnSnpCredit;
   deallocateDvmTBE;
   wakeUpStalled;
-  popC2CRxRspQueue;
+  popC2CRxSnpQueue;
 }
 
-// Comp from remote -> complete
-transition(DVM_WAIT_COMP, RspIn_Comp, I) {
+transition(DVM_WAIT_COMP, RspIn_SnpResp_Out, I) {
   sendSnpRespIToMN;
   returnRspCredit;
   deallocateDvmTBE;
@@ -860,7 +910,7 @@ transition(DVM_WAIT_COMP, RspIn_Comp, I) {
 ////////////////////////////////////////////////////////////////////////////
 // WritePush source-side flow (Phase 6: IHI0098A B4.6)
 // Local RN sends write req + WriteData as separate messages.
-// C2CG buffers write req, then combines with WriteData into
+// C2CG returns DBIDResp locally, buffers write req, then combines with WriteData into
 // WrReqDataS/L and sends as single C2C DAT message.
 // Consume: REQ + DAT credit on combined send
 // Return: RSP credit on Comp from remote
@@ -873,6 +923,8 @@ transition(I, {OutReq_WriteNoSnpFull, OutReq_WriteNoSnpPtl,
   allocateTBE;
   setOutbound;
   recordLocalIDs_fromReq;
+  bindLocalDBIDFromSelf;
+  sendWritePushDBIDRespToLocal;
   popReqRdyQueue;
 }
 
@@ -967,6 +1019,7 @@ transition({I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
             WR_ACTIVE_DBID, WR_WAIT_COMP,
             COMPACK_ACTIVE, COMPACK_DL_ACTIVE,
             COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE,
+            ATOMIC_WAIT_DBID, ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP,
             RETRY_WAIT,
             SNP_WAIT_RESP,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
@@ -981,6 +1034,7 @@ transition({I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
             WR_ACTIVE_DBID, WR_WAIT_COMP,
             COMPACK_ACTIVE, COMPACK_DL_ACTIVE,
             COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE,
+            ATOMIC_WAIT_DBID, ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP,
             RETRY_WAIT,
             SNP_WAIT_RESP,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
@@ -1004,6 +1058,7 @@ transition({REQ_ACTIVE, ACTIVE_WAIT_SEP,
             WR_ACTIVE_DBID, WR_WAIT_COMP,
             COMPACK_ACTIVE, COMPACK_DL_ACTIVE,
             COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE,
+            ATOMIC_WAIT_DBID, ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP,
             RETRY_WAIT,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
             WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
@@ -1022,6 +1077,7 @@ transition({REQ_ACTIVE, ACTIVE_WAIT_SEP,
             WR_ACTIVE_DBID, WR_WAIT_COMP,
             COMPACK_ACTIVE, COMPACK_DL_ACTIVE,
             COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE,
+            ATOMIC_WAIT_DBID, ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP,
             RETRY_WAIT,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
             WR_PUSH_WAIT_DATA, WR_PUSH_SENT,

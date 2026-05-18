@@ -207,6 +207,9 @@ Event reqToEvent(CHIRequestType type) {
     return Event:OutReq_WriteNoSnpFull;
   } else if (type == CHIRequestType:WriteNoSnpPtl) {
     return Event:OutReq_WriteNoSnpPtl;
+  } else if ((type == CHIRequestType:DvmOpNonSync) ||
+             (type == CHIRequestType:DvmOpSync)) {
+    return Event:OutReq_WritePull;
   } else if (isCompOnlyDatalessRequest(type)) {
     return Event:OutReq_Evict;
   } else if (type == CHIRequestType:AtomicReturn) {
@@ -397,6 +400,10 @@ bool writeCompRequired(CHIRequestType type) {
 }
 
 MachineID localRequestDest(CHIRequestMsg msg, Addr addr) {
+  if ((msg.type == CHIRequestType:DvmOpNonSync) ||
+      (msg.type == CHIRequestType:DvmOpSync)) {
+    return mapAddressToDownstreamMachine(addr, MachineType:MiscNode);
+  }
   if (msg.hasC2CEgressType) {
     return mapAddressToDownstreamMachine(addr, msg.c2cEgressType);
   }
@@ -559,6 +566,7 @@ void clearTBEDefaults(TBE tbe) {
   tbe.dataBlk.clear();
   tbe.dataBlkValid.clear();
   tbe.rxtxBytes := 0;
+  tbe.dataBytesExpected := blockSize;
   tbe.pendingSnpResps := 0;
   tbe.c2cSnpResponsesToForward := 0;
   tbe.c2cSnpForwardDests.clear();
@@ -676,5 +684,5 @@ Event dataToEventIn(CHIDataType type) {
 
 // Check if all data flits for a cache line have been forwarded
 bool allDataFlitsForwarded(TBE tbe) {
-  return tbe.rxtxBytes >= blockSize;
+  return tbe.rxtxBytes >= tbe.dataBytesExpected;
 }
