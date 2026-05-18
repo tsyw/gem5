@@ -46,51 +46,26 @@ namespace ruby
 class C2CTxnKeyTable
 {
   private:
-    struct LocalKey
+    struct ScopedTxnKey
     {
-        MachineID src;
+        MachineID endpoint;
         Addr txnId;
         Addr addr;
 
         bool
-        operator==(const LocalKey &other) const
+        operator==(const ScopedTxnKey &other) const
         {
-            return src == other.src && txnId == other.txnId &&
+            return endpoint == other.endpoint && txnId == other.txnId &&
                    addr == other.addr;
         }
     };
 
-    struct LocalKeyHash
+    struct ScopedTxnKeyHash
     {
         std::size_t
-        operator()(const LocalKey &key) const
+        operator()(const ScopedTxnKey &key) const
         {
-            return std::hash<MachineID>()(key.src) ^
-                   (std::hash<Addr>()(key.txnId) << 1) ^
-                   (std::hash<Addr>()(key.addr) << 2);
-        }
-    };
-
-    struct C2CInKey
-    {
-        MachineID peer;
-        Addr txnId;
-        Addr addr;
-
-        bool
-        operator==(const C2CInKey &other) const
-        {
-            return peer == other.peer && txnId == other.txnId &&
-                   addr == other.addr;
-        }
-    };
-
-    struct C2CInKeyHash
-    {
-        std::size_t
-        operator()(const C2CInKey &key) const
-        {
-            return std::hash<MachineID>()(key.peer) ^
+            return std::hash<MachineID>()(key.endpoint) ^
                    (std::hash<Addr>()(key.txnId) << 1) ^
                    (std::hash<Addr>()(key.addr) << 2);
         }
@@ -120,25 +95,25 @@ class C2CTxnKeyTable
     void
     bindC2CInScoped(MachineID peer, Addr txn_id, Addr addr, Addr key)
     {
-        m_c2cInScopedKeys[C2CInKey{peer, txn_id, addr}] = key;
+        m_c2cInScopedKeys[ScopedTxnKey{peer, txn_id, addr}] = key;
     }
 
     bool
     hasC2CInScoped(MachineID peer, Addr txn_id, Addr addr) const
     {
-        return contains(m_c2cInScopedKeys, C2CInKey{peer, txn_id, addr});
+        return contains(m_c2cInScopedKeys, ScopedTxnKey{peer, txn_id, addr});
     }
 
     Addr
     lookupC2CInScoped(MachineID peer, Addr txn_id, Addr addr) const
     {
-        return lookup(m_c2cInScopedKeys, C2CInKey{peer, txn_id, addr});
+        return lookup(m_c2cInScopedKeys, ScopedTxnKey{peer, txn_id, addr});
     }
 
     void
     bindLocal(MachineID src, Addr txn_id, Addr addr, Addr key)
     {
-        auto &keys = m_localKeys[LocalKey{src, txn_id, addr}];
+        auto &keys = m_localKeys[ScopedTxnKey{src, txn_id, addr}];
         if (std::find(keys.begin(), keys.end(), key) == keys.end()) {
             keys.push_back(key);
         }
@@ -147,14 +122,14 @@ class C2CTxnKeyTable
     bool
     hasLocal(MachineID src, Addr txn_id, Addr addr) const
     {
-        auto it = m_localKeys.find(LocalKey{src, txn_id, addr});
+        auto it = m_localKeys.find(ScopedTxnKey{src, txn_id, addr});
         return it != m_localKeys.end() && !it->second.empty();
     }
 
     Addr
     lookupLocal(MachineID src, Addr txn_id, Addr addr) const
     {
-        auto it = m_localKeys.find(LocalKey{src, txn_id, addr});
+        auto it = m_localKeys.find(ScopedTxnKey{src, txn_id, addr});
         assert(it != m_localKeys.end());
         assert(!it->second.empty());
         return it->second.front();
@@ -270,9 +245,10 @@ class C2CTxnKeyTable
     }
 
     std::unordered_map<Addr, Addr> m_c2cOutKeys;
-    std::unordered_map<C2CInKey, Addr, C2CInKeyHash> m_c2cInScopedKeys;
+    std::unordered_map<ScopedTxnKey, Addr, ScopedTxnKeyHash> m_c2cInScopedKeys;
     std::unordered_map<Addr, Addr> m_localTxnKeys;
-    std::unordered_map<LocalKey, std::vector<Addr>, LocalKeyHash> m_localKeys;
+    std::unordered_map<ScopedTxnKey, std::vector<Addr>, ScopedTxnKeyHash>
+        m_localKeys;
     std::unordered_map<Addr, std::vector<Addr>> m_addrKeys;
 };
 
