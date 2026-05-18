@@ -184,17 +184,13 @@ bool isCompOnlyDatalessRequest(CHIRequestType type) {
 
 // Event mapping: CHI request type -> C2CG event
 Event reqToEvent(CHIRequestType type) {
-  if (type == CHIRequestType:ReadShared) {
-    return Event:OutReq_ReadShared;
-  } else if (type == CHIRequestType:ReadUnique) {
-    return Event:OutReq_ReadUnique;
-  } else if (type == CHIRequestType:ReadOnce) {
-    return Event:OutReq_ReadOnce;
-  } else if ((type == CHIRequestType:ReadNoSnp) ||
-             (type == CHIRequestType:ReadNoSnpSep)) {
-    return Event:OutReq_ReadNoSnp;
-  } else if (type == CHIRequestType:ReadNotSharedDirty) {
-    return Event:OutReq_ReadNotSharedDirty;
+  if ((type == CHIRequestType:ReadShared) ||
+      (type == CHIRequestType:ReadUnique) ||
+      (type == CHIRequestType:ReadOnce) ||
+      (type == CHIRequestType:ReadNoSnp) ||
+      (type == CHIRequestType:ReadNoSnpSep) ||
+      (type == CHIRequestType:ReadNotSharedDirty)) {
+    return Event:OutReq_Read;
   } else if (type == CHIRequestType:CleanUnique) {
     return Event:OutReq_CleanUnique;
   } else if (type == CHIRequestType:WriteUniqueFull) {

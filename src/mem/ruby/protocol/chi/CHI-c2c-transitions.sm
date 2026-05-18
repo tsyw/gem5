@@ -88,9 +88,7 @@ transition({I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
 // Return: RSP/DAT credit on C2C RX dequeue
 ////////////////////////////////////////////////////////////////////////////
 
-transition(I, {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
-               OutReq_ReadNoSnp, OutReq_ReadNotSharedDirty},
-           REQ_ACTIVE) {
+transition(I, OutReq_Read, REQ_ACTIVE) {
   allocateTBE;
   setOutbound;
   recordLocalIDs_fromReq;
@@ -201,22 +199,6 @@ transition(ACTIVE_WAIT_SEP, RspIn_ReadReceipt_In, COMPACK_ACTIVE) {
   popRspInQueue;
 }
 
-// CompAck can arrive before this gateway observes the response/data half,
-// either because the requester treats the first DataSepResp as RespSepData or
-// because local/C2C queues reorder same-tick completion messages.
-transition(REQ_ACTIVE, RspIn_CompAck_Out) {
-  forwardFirstCompAckToC2CTx;
-  markCompAckDone;
-  popRspInQueue;
-}
-
-transition(REQ_ACTIVE, RspIn_CompAck_In) {
-  forwardCompAckToHN;
-  returnRspCredit;
-  markCompAckDone;
-  popC2CRxRspQueue;
-}
-
 // ACTIVE_WAIT_SEP: one half of a separated read has arrived; ports route
 // completion vs more-data events based on TBE flags.
 transition(ACTIVE_WAIT_SEP, DatIn_SepReadData_Done_Out, COMPACK_ACTIVE) {
@@ -268,8 +250,9 @@ transition(ACTIVE_WAIT_SEP, DatIn_SepReadData_More_In) {
   popDatInQueue;
 }
 
-// CompAck can race ahead of the remaining separated-read half; keep waiting in
-// ACTIVE_WAIT_SEP until both response and data have been observed.
+// CompAck can arrive after RespSepData, or after the first CompData flit that
+// CHI-cache treats as RespSepData, while this gateway is still waiting for the
+// remaining separated-read data half or additional data flits.
 transition(ACTIVE_WAIT_SEP, RspIn_CompAck_Out) {
   forwardFirstCompAckToC2CTx;
   markCompAckDone;
@@ -635,14 +618,6 @@ transition(I, InReq_Evict, COMP_ONLY_DL_ACTIVE) {
   forwardC2CReqToLocal;
   returnReqCredit;
   popC2CRxReqQueue;
-}
-
-// Some requesters still emit CompAck for Evict-like Comp-only requests. The
-// local HN does not need it, so just return the C2C RSP credit and wait for
-// the terminal Comp.
-transition(COMP_ONLY_DL_ACTIVE, RspIn_CompAck_In) {
-  returnRspCredit;
-  popC2CRxRspQueue;
 }
 
 // Evict Comp from remote (outbound) -> forward to local, done (no CompAck)
@@ -1033,9 +1008,7 @@ transition({REQ_ACTIVE, ACTIVE_WAIT_SEP,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
             WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
             WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
-           {OutReq_ReadShared, OutReq_ReadUnique, OutReq_ReadOnce,
-            OutReq_ReadNoSnp, OutReq_ReadNotSharedDirty,
-            OutReq_CleanUnique, OutReq_Evict,
+           {OutReq_Read, OutReq_CleanUnique, OutReq_Evict,
             OutReq_WriteUniqueFull, OutReq_WriteUniquePtl,
             OutReq_WriteBackFull, OutReq_WriteCleanFull,
             OutReq_WriteEvictFull, OutReq_WriteNoSnpFull,

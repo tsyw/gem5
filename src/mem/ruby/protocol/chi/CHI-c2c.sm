@@ -215,12 +215,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     CheckAllocTBE_WithCredit,    desc="Alloc TBE with pre-granted credit";
 
     // Outbound request events (local NoC -> C2C)
-    OutReq_ReadShared,           desc="ReadShared for remote address";
+    OutReq_Read,                 desc="Read request for remote address";
     OutReq_MergeReadShared,      desc="Merge local ReadShared with active read";
-    OutReq_ReadUnique,           desc="ReadUnique for remote address";
-    OutReq_ReadOnce,             desc="ReadOnce for remote address";
-    OutReq_ReadNoSnp,            desc="ReadNoSnp for remote address";
-    OutReq_ReadNotSharedDirty,   desc="ReadNotSharedDirty for remote";
     OutReq_CleanUnique,          desc="CleanUnique for remote address";
     OutReq_WriteUniqueFull,      desc="WriteUniqueFull for remote";
     OutReq_WriteUniquePtl,       desc="WriteUniquePtl for remote";
