@@ -193,29 +193,23 @@ Event reqToEvent(CHIRequestType type) {
     return Event:OutReq_Read;
   } else if (type == CHIRequestType:CleanUnique) {
     return Event:OutReq_CleanUnique;
-  } else if (type == CHIRequestType:WriteUniqueFull) {
-    return Event:OutReq_WriteUniqueFull;
-  } else if (type == CHIRequestType:WriteUniquePtl) {
-    return Event:OutReq_WriteUniquePtl;
-  } else if (type == CHIRequestType:WriteBackFull) {
-    return Event:OutReq_WriteBackFull;
-  } else if (type == CHIRequestType:WriteCleanFull) {
-    return Event:OutReq_WriteCleanFull;
-  } else if (type == CHIRequestType:WriteEvictFull) {
-    return Event:OutReq_WriteEvictFull;
-  } else if (type == CHIRequestType:WriteNoSnp) {
-    return Event:OutReq_WriteNoSnpFull;
-  } else if (type == CHIRequestType:WriteNoSnpPtl) {
-    return Event:OutReq_WriteNoSnpPtl;
+  } else if ((type == CHIRequestType:WriteUniqueFull) ||
+             (type == CHIRequestType:WriteUniquePtl) ||
+             (type == CHIRequestType:WriteNoSnp) ||
+             (type == CHIRequestType:WriteNoSnpPtl)) {
+    return Event:OutReq_WritePush;
+  } else if ((type == CHIRequestType:WriteBackFull) ||
+             (type == CHIRequestType:WriteCleanFull) ||
+             (type == CHIRequestType:WriteEvictFull)) {
+    return Event:OutReq_Write;
   } else if ((type == CHIRequestType:DvmOpNonSync) ||
              (type == CHIRequestType:DvmOpSync)) {
-    return Event:OutReq_WritePull;
+    return Event:OutReq_Write;
   } else if (isCompOnlyDatalessRequest(type)) {
     return Event:OutReq_Evict;
-  } else if (type == CHIRequestType:AtomicReturn) {
-    return Event:OutReq_AtomicLoad;
-  } else if (type == CHIRequestType:AtomicNoReturn) {
-    return Event:OutReq_AtomicStore;
+  } else if ((type == CHIRequestType:AtomicReturn) ||
+             (type == CHIRequestType:AtomicNoReturn)) {
+    return Event:OutReq_Atomic;
   } else {
     error("Invalid CHIRequestType for C2CG reqToEvent");
   }
@@ -545,6 +539,20 @@ bool isDvmRequest(CHIRequestType type) {
   return false;
 }
 
+bool shouldExpandReadMergedSnpTargets(CHIRequestType type, bool retToSrc) {
+  if (type == CHIRequestType:SnpCleanInvalid) {
+    return true;
+  }
+  if ((type == CHIRequestType:SnpUnique) && (retToSrc == false)) {
+    return true;
+  }
+  return false;
+}
+
+bool allowsMultipleSnpDataResponders(CHIRequestType type, bool retToSrc) {
+  return shouldExpandReadMergedSnpTargets(type, retToSrc);
+}
+
 // Shared TBE field initialization (avoids triplicated defaults)
 void clearTBEDefaults(TBE tbe) {
   tbe.isRead := false;
@@ -571,6 +579,9 @@ void clearTBEDefaults(TBE tbe) {
   tbe.c2cSnpResponsesToForward := 0;
   tbe.c2cSnpForwardDests.clear();
   tbe.snpDataRespondersSeen.clear();
+  tbe.allowMultipleSnpDataResponders := false;
+  tbe.hasSnpDataCopyResponder := false;
+  tbe.snpDataCopyResponder := machineID;
   tbe.compAckDone := false;
   tbe.pendingCompAcks := 0;
   tbe.readFanoutDests.clear();

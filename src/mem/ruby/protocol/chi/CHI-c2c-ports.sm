@@ -66,58 +66,56 @@ in_port(c2cRxRspInPort, CHIResponseMsg, c2cRxRsp, rank=12,
         "c2cRxRspInPort: addr=%#x type=%s responder=%s txnId=%#x usesTxnId=%d gateway=%s\n",
         in_msg.addr, in_msg.type, in_msg.responder,
         in_msg.txnId, in_msg.usesTxnId, in_msg.c2cSrcGateway);
-      // Snoop responses: check snpTBEs first (collision avoidance)
+      // DVM completion also uses SnpResp_I; keep it out of snpTBEs.
       TBE tbe;
       if (isSnpRespType(in_msg.type)) {
-        tbe := snpTBEs[in_msg.addr];
-        if (is_valid(tbe) == false) {
+        if ((in_msg.type == CHIResponseType:SnpResp_I) &&
+            in_msg.usesTxnId) {
           tbe := dvmTBEs[in_msg.addr];
-        }
-        if (is_valid(tbe) == false) {
-          tbe := lookupTBEByAddress(in_msg.addr);
-        }
-        if (is_valid(tbe) == false) {
-          error("c2cRxRspInPort: no snoop TBE for response message");
-        }
-        if ((tbe.pendingSnpResps == 1) &&
-            (tbe.dataBlkValid.isEmpty() || tbe.dataBlkValid.isFull())) {
+          assert(is_valid(tbe));
+          assert(tbe.state == State:DVM_WAIT_COMP);
+          assert(in_msg.txnId == tbe.localTxnID);
           trigger(Event:RspIn_SnpResp_Out, in_msg.addr, tbe);
         } else {
-          trigger(Event:RspIn_SnpResp_More_Out, in_msg.addr, tbe);
-        }
-      } else {
-        if (in_msg.type == CHIResponseType:CompAck) {
-          tbe := lookupTBEByC2CInScoped(in_msg.c2cSrcGateway,
-                                        in_msg.txnId, in_msg.addr);
-        } else {
-          tbe := lookupTBEByC2COut(in_msg.txnId);
-        }
-        if (is_valid(tbe) == false) {
-          tbe := dvmTBEs[in_msg.addr];
-        }
-        if (is_valid(tbe)) {
-          DPRINTF(RubySlicc,
-                  "c2cRxRspMatch: addr=%#x state=%s outbound=%d storSlot=%d localSrc=%s localTxn=%#x remoteSrc=%s remoteTxn=%#x\n",
-                  in_msg.addr, tbe.state, tbe.isOutbound, tbe.storSlot,
-                  tbe.localSrcID, tbe.localTxnID,
-                  tbe.remoteSrcID, tbe.remoteTxnID);
-          if (tbe.isOutbound) {
-            // Outbound TBE: response from remote (return C2C credits)
-            Event ev := respToEventOut(in_msg.type);
-            if ((tbe.state == State:ACTIVE_WAIT_SEP) &&
-                (ev == Event:RspIn_RespSepData_Out) &&
-                tbe.expectingComp) {
-              trigger(Event:RspIn_SepReadResp_Done_Out,
-                      in_msg.addr, tbe);
-            } else {
-              trigger(ev, in_msg.addr, tbe);
-            }
+          tbe := snpTBEs[in_msg.addr];
+          assert(is_valid(tbe));
+          assert(tbe.state == State:SNP_WAIT_RESP);
+          bool finalSnpResp := (tbe.pendingSnpResps == 1) &&
+              (tbe.dataBlkValid.isEmpty() || tbe.dataBlkValid.isFull());
+          if (finalSnpResp) {
+            trigger(Event:RspIn_SnpResp_Out, in_msg.addr, tbe);
           } else {
-            // Inbound TBE: CompAck from remote RN (return RSP credit)
-            trigger(respToEventIn(in_msg.type), in_msg.addr, tbe);
+            trigger(Event:RspIn_SnpResp_More_Out, in_msg.addr, tbe);
           }
+        }
+      } else if (in_msg.type == CHIResponseType:CompAck) {
+        tbe := lookupTBEByC2CInScoped(in_msg.c2cSrcGateway,
+                                      in_msg.txnId, in_msg.addr);
+        assert(is_valid(tbe));
+        assert(tbe.isOutbound == false);
+        DPRINTF(RubySlicc,
+                "c2cRxRspMatch: addr=%#x state=%s outbound=%d storSlot=%d localSrc=%s localTxn=%#x remoteSrc=%s remoteTxn=%#x\n",
+                in_msg.addr, tbe.state, tbe.isOutbound, tbe.storSlot,
+                tbe.localSrcID, tbe.localTxnID,
+                tbe.remoteSrcID, tbe.remoteTxnID);
+        trigger(respToEventIn(in_msg.type), in_msg.addr, tbe);
+      } else {
+        tbe := lookupTBEByC2COut(in_msg.txnId);
+        assert(is_valid(tbe));
+        assert(tbe.isOutbound);
+        DPRINTF(RubySlicc,
+                "c2cRxRspMatch: addr=%#x state=%s outbound=%d storSlot=%d localSrc=%s localTxn=%#x remoteSrc=%s remoteTxn=%#x\n",
+                in_msg.addr, tbe.state, tbe.isOutbound, tbe.storSlot,
+                tbe.localSrcID, tbe.localTxnID,
+                tbe.remoteSrcID, tbe.remoteTxnID);
+        Event ev := respToEventOut(in_msg.type);
+        if ((tbe.state == State:ACTIVE_WAIT_SEP) &&
+            (ev == Event:RspIn_RespSepData_Out) &&
+            tbe.expectingComp) {
+          trigger(Event:RspIn_SepReadResp_Done_Out,
+                  in_msg.addr, tbe);
         } else {
-          error("c2cRxRspInPort: no TBE for response message");
+          trigger(ev, in_msg.addr, tbe);
         }
       }
     }
@@ -148,71 +146,63 @@ in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
                                   cyclesToTicks(stall_recycle_lat));
         }
       } else if (isSnpRespDataType(in_msg.type)) {
-        // Snoop data: non-directional, check snpTBEs first
         TBE tbe := snpTBEs[in_msg.addr];
-        if (is_valid(tbe) == false) {
-          tbe := lookupTBEByAddress(in_msg.addr);
-        }
-        if (is_valid(tbe) == false) {
-          error("c2cRxDatInPort: no snoop TBE for data message");
-        }
+        assert(is_valid(tbe));
+        assert(tbe.state == State:SNP_WAIT_RESP);
         WriteMask combinedMask := tbe.dataBlkValid;
-        combinedMask.orMask(in_msg.bitMask);
         bool firstResponderData :=
           tbe.snpDataRespondersSeen.isElement(in_msg.responder) == false;
         int pendingAfter := tbe.pendingSnpResps;
         if ((firstResponderData == true) && (pendingAfter > 0)) {
           pendingAfter := pendingAfter - 1;
         }
-        bool finalData := combinedMask.isFull() && (pendingAfter == 0);
+        if ((tbe.hasSnpDataCopyResponder == false) ||
+            (tbe.snpDataCopyResponder == in_msg.responder)) {
+          combinedMask.orMask(in_msg.bitMask);
+        }
+        bool finalData := (pendingAfter == 0) &&
+          (combinedMask.isEmpty() || combinedMask.isFull());
         if (finalData) {
           trigger(Event:DatIn_SnpRespData_Out, in_msg.addr, tbe);
         } else {
           trigger(Event:DatIn_SnpRespData_More_Out, in_msg.addr, tbe);
         }
+      } else if (isWriteDataType(in_msg.type)) {
+        TBE tbe := lookupTBEByC2CInScoped(in_msg.c2cSrcGateway,
+                                          in_msg.txnId, in_msg.addr);
+        assert(is_valid(tbe));
+        assert(tbe.isOutbound == false);
+        DPRINTF(RubySlicc,
+                "c2cRxDatMatch: addr=%#x state=%s outbound=%d storSlot=%d localSrc=%s localTxn=%#x remoteSrc=%s remoteTxn=%#x\n",
+                in_msg.addr, tbe.state, tbe.isOutbound, tbe.storSlot,
+                tbe.localSrcID, tbe.localTxnID,
+                tbe.remoteSrcID, tbe.remoteTxnID);
+        trigger(dataToEventIn(in_msg.type), in_msg.addr, tbe);
       } else {
-        // Regular data from C2C: outbound TBE → read response (_Out),
-        // inbound TBE → write/atomic data from remote (_In)
-        TBE tbe;
-        if (isWriteDataType(in_msg.type)) {
-          tbe := lookupTBEByC2CInScoped(in_msg.c2cSrcGateway,
-                                        in_msg.txnId, in_msg.addr);
-        } else {
-          tbe := lookupTBEByC2COut(in_msg.txnId);
-        }
-        if (is_valid(tbe)) {
-          DPRINTF(RubySlicc,
-                  "c2cRxDatMatch: addr=%#x state=%s outbound=%d storSlot=%d localSrc=%s localTxn=%#x remoteSrc=%s remoteTxn=%#x\n",
-                  in_msg.addr, tbe.state, tbe.isOutbound, tbe.storSlot,
-                  tbe.localSrcID, tbe.localTxnID,
-                  tbe.remoteSrcID, tbe.remoteTxnID);
-          if (tbe.isOutbound) {
-            if (isWriteDataType(in_msg.type)) {
-              error("c2cRxDatInPort: write data matched outbound TBE");
-            } else {
-              Event ev := dataToEventOut(in_msg.type);
-              if (tbe.state == State:ACTIVE_WAIT_SEP) {
-                if (tbe.expectingData &&
-                    (ev == Event:DatIn_DataSepResp_Out)) {
-                  trigger(Event:DatIn_SepReadData_Done_Out,
-                          in_msg.addr, tbe);
-                } else if (tbe.expectingComp &&
-                           ((ev == Event:DatIn_CompData_Out) ||
-                            (ev == Event:DatIn_DataSepResp_Out))) {
-                  trigger(Event:DatIn_SepReadData_More_Out,
-                          in_msg.addr, tbe);
-                } else {
-                  trigger(ev, in_msg.addr, tbe);
-                }
-              } else {
-                trigger(ev, in_msg.addr, tbe);
-              }
-            }
+        TBE tbe := lookupTBEByC2COut(in_msg.txnId);
+        assert(is_valid(tbe));
+        assert(tbe.isOutbound);
+        DPRINTF(RubySlicc,
+                "c2cRxDatMatch: addr=%#x state=%s outbound=%d storSlot=%d localSrc=%s localTxn=%#x remoteSrc=%s remoteTxn=%#x\n",
+                in_msg.addr, tbe.state, tbe.isOutbound, tbe.storSlot,
+                tbe.localSrcID, tbe.localTxnID,
+                tbe.remoteSrcID, tbe.remoteTxnID);
+        Event ev := dataToEventOut(in_msg.type);
+        if (tbe.state == State:ACTIVE_WAIT_SEP) {
+          if (tbe.expectingData &&
+              (ev == Event:DatIn_DataSepResp_Out)) {
+            trigger(Event:DatIn_SepReadData_Done_Out,
+                    in_msg.addr, tbe);
+          } else if (tbe.expectingComp &&
+                     ((ev == Event:DatIn_CompData_Out) ||
+                      (ev == Event:DatIn_DataSepResp_Out))) {
+            trigger(Event:DatIn_SepReadData_More_Out,
+                    in_msg.addr, tbe);
           } else {
-            trigger(dataToEventIn(in_msg.type), in_msg.addr, tbe);
+            trigger(ev, in_msg.addr, tbe);
           }
         } else {
-          error("c2cRxDatInPort: no TBE for data message");
+          trigger(ev, in_msg.addr, tbe);
         }
       }
     }
@@ -239,10 +229,24 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
                   in_msg.addr);
         if (is_valid(tbe) && (tbe.isOutbound == false) &&
             (in_msg.txnId == tbe.txnID)) {
-          if (in_msg.type == CHIResponseType:RetryAck) {
-            if (tbe.retryPending == false && tbe.retryGrantPending) {
-              trigger(Event:RetryAckAfterPCrdGrantFromHN, in_msg.addr, tbe);
-            } else if (tbe.retryPending == false) {
+          bool retryHandshakeState :=
+            (tbe.state == State:REQ_ACTIVE) ||
+            (tbe.state == State:WR_ACTIVE_DBID) ||
+            (tbe.state == State:COMPACK_DL_ACTIVE) ||
+            (tbe.state == State:COMP_ONLY_DL_ACTIVE) ||
+            (tbe.state == State:ATOMIC_ACTIVE) ||
+            (tbe.state == State:ATOMIC_WAIT_DBID) ||
+            (tbe.state == State:WR_PUSH_FWD_WAIT_DBID) ||
+            (tbe.state == State:RETRY_WAIT);
+          if (retryHandshakeState == false) {
+            DPRINTF(RubySlicc,
+                    "rspInPort: absorb stale retry/grant addr=%#x type=%s txnId=%#x state=%s tbeTxnID=%#x outbound=%d retryPending=%d retryGrantPending=%d\n",
+                    in_msg.addr, in_msg.type, in_msg.txnId,
+                    tbe.state, tbe.txnID, tbe.isOutbound,
+                    tbe.retryPending, tbe.retryGrantPending);
+            rspInPort.dequeue(clockEdge());
+          } else if (in_msg.type == CHIResponseType:RetryAck) {
+            if (tbe.retryPending == false) {
               trigger(Event:RetryAckFromHN, in_msg.addr, tbe);
             } else {
               DPRINTF(RubySlicc,
@@ -252,39 +256,17 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
                       tbe.retryPending, tbe.retryGrantPending);
               rspInPort.dequeue(clockEdge());
             }
-          } else if (tbe.retryPending) {
-            if (tbe.state == State:RETRY_WAIT) {
-              if (tbe.retryState == State:REQ_ACTIVE) {
-                trigger(Event:PCrdGrantRetryReqFromHN, in_msg.addr, tbe);
-              } else if (tbe.retryState == State:WR_ACTIVE_DBID) {
-                trigger(Event:PCrdGrantRetryWriteFromHN, in_msg.addr, tbe);
-              } else if (tbe.retryState == State:COMPACK_DL_ACTIVE) {
-                trigger(Event:PCrdGrantRetryCompAckDatalessFromHN,
-                        in_msg.addr, tbe);
-              } else if (tbe.retryState == State:COMP_ONLY_DL_ACTIVE) {
-                trigger(Event:PCrdGrantRetryCompOnlyDatalessFromHN,
-                        in_msg.addr, tbe);
-              } else if ((tbe.retryState == State:ATOMIC_ACTIVE) ||
-                         (tbe.retryState == State:ATOMIC_WAIT_DBID)) {
-                trigger(Event:PCrdGrantRetryAtomicFromHN, in_msg.addr, tbe);
-              } else if (tbe.retryState == State:WR_PUSH_FWD_WAIT_DBID) {
-                trigger(Event:PCrdGrantRetryWritePushFromHN,
-                        in_msg.addr, tbe);
-              } else {
-                error("rspInPort: invalid retryState for PCrdGrant");
-              }
-            } else {
-              trigger(Event:PCrdGrantFromHN, in_msg.addr, tbe);
-            }
-          } else if (tbe.retryGrantPending == false) {
-            trigger(Event:EarlyPCrdGrantFromHN, in_msg.addr, tbe);
           } else {
-            DPRINTF(RubySlicc,
-                    "rspInPort: absorb duplicate retry/grant addr=%#x type=%s txnId=%#x state=%s tbeTxnID=%#x outbound=%d retryPending=%d retryGrantPending=%d\n",
-                    in_msg.addr, in_msg.type, in_msg.txnId,
-                    tbe.state, tbe.txnID, tbe.isOutbound,
-                    tbe.retryPending, tbe.retryGrantPending);
-            rspInPort.dequeue(clockEdge());
+            if (tbe.retryGrantPending == false) {
+              trigger(Event:PCrdGrantFromHN, in_msg.addr, tbe);
+            } else {
+              DPRINTF(RubySlicc,
+                      "rspInPort: absorb duplicate retry/grant addr=%#x type=%s txnId=%#x state=%s tbeTxnID=%#x outbound=%d retryPending=%d retryGrantPending=%d\n",
+                      in_msg.addr, in_msg.type, in_msg.txnId,
+                      tbe.state, tbe.txnID, tbe.isOutbound,
+                      tbe.retryPending, tbe.retryGrantPending);
+              rspInPort.dequeue(clockEdge());
+            }
           }
         } else {
           if (is_valid(tbe)) {
@@ -415,9 +397,13 @@ in_port(datInPort, CHIDataMsg, datIn, rank=9,
           WriteMask combinedMask := tbe.dataBlkValid;
           if ((tbe.c2cSnpForwardDests.count() == 0) ||
               tbe.c2cSnpForwardDests.isElement(in_msg.responder)) {
-            combinedMask.orMask(in_msg.bitMask);
+            if ((tbe.hasSnpDataCopyResponder == false) ||
+                (tbe.snpDataCopyResponder == in_msg.responder)) {
+              combinedMask.orMask(in_msg.bitMask);
+            }
           }
-          bool finalData := combinedMask.isFull() && (pendingAfter == 0);
+          bool finalData := (pendingAfter == 0) &&
+            (combinedMask.isEmpty() || combinedMask.isFull());
           if (finalData) {
             trigger(Event:DatIn_SnpRespData_In, in_msg.addr, tbe);
           } else {
@@ -625,24 +611,12 @@ in_port(reqRdyInPort, CHIRequestMsg, reqRdy, rank=3) {
           reqRdyInPort.recycle(clockEdge(),
                                cyclesToTicks(stall_recycle_lat));
         } else if (writepush_enabled == false &&
-                   isWriteRequest(in_msg.type) &&
-                   in_msg.type != CHIRequestType:WriteEvictFull &&
-                   in_msg.type != CHIRequestType:WriteCleanFull) {
-          // WritePull fallback for non-evict writes
+             isWriteRequest(in_msg.type)) {
+          // WritePush disabled: forward writes through the DBID-gated path.
           DPRINTF(RubySlicc,
-                  "reqRdyInPort dispatch WritePull: addr=%#x type=%s requestor=%s\n",
+            "reqRdyInPort dispatch Write: addr=%#x type=%s requestor=%s\n",
                   in_msg.addr, in_msg.type, in_msg.requestor);
-          trigger(Event:OutReq_WritePull, in_msg.addr,
-              nullTBE());
-        } else if (writepush_enabled == false &&
-                   in_msg.type == CHIRequestType:WriteCleanFull) {
-          // WriteCleanFull can get early Comp (no DBID), like
-          // WriteEvictFull, but the request opcode stays WriteCleanFull.
-          DPRINTF(RubySlicc,
-              "reqRdyInPort dispatch WriteCleanNoPush: addr=%#x type=%s requestor=%s\n",
-              in_msg.addr, in_msg.type, in_msg.requestor);
-          trigger(Event:OutReq_WriteCleanNoPush, in_msg.addr,
-              nullTBE());
+          trigger(Event:OutReq_Write, in_msg.addr, nullTBE());
         } else {
           DPRINTF(RubySlicc,
               "reqRdyInPort dispatch: addr=%#x type=%s requestor=%s\n",
@@ -673,12 +647,7 @@ in_port(c2cRxReqInPort, CHIRequestMsg, c2cRxReq, rank=2) {
           // Map C2C request events
           if (isReadRequest(in_msg.type)) {
             trigger(Event:InReq_Read, in_msg.addr, nullTBE());
-          } else if ((in_msg.type == CHIRequestType:WriteEvictFull) ||
-                     (in_msg.type == CHIRequestType:WriteCleanFull)) {
-            trigger(Event:InReq_EvictWrite, in_msg.addr,
-                    nullTBE());
-          } else if (isWriteRequest(in_msg.type) ||
-                     isDvmRequest(in_msg.type)) {
+            } else if (isWriteRequest(in_msg.type) || isDvmRequest(in_msg.type)) {
             trigger(Event:InReq_Write, in_msg.addr, nullTBE());
           } else if (isAtomicRequest(in_msg.type)) {
             trigger(Event:InReq_Atomic, in_msg.addr, nullTBE());

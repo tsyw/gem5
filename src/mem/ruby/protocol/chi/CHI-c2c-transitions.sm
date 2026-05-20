@@ -317,64 +317,71 @@ transition(COMPACK_ACTIVE, CompleteTxn, I) {
 }
 
 // Inbound retry handshake. RetryAck and PCrdGrant may arrive in either
-// order; tbe.retryState carries the state to resume after PCrdGrant.
+// order. Each message records its flag and moves/stays in RETRY_WAIT;
+// checkRetryReady schedules the resume event once both have arrived.
 transition({REQ_ACTIVE, WR_ACTIVE_DBID, COMPACK_DL_ACTIVE,
             COMP_ONLY_DL_ACTIVE,
             ATOMIC_ACTIVE, ATOMIC_WAIT_DBID, WR_PUSH_FWD_WAIT_DBID},
            RetryAckFromHN, RETRY_WAIT) {
   saveRetryState;
   markRetryPending;
+  checkRetryReady;
   popRspInQueue;
 }
 
 transition({REQ_ACTIVE, WR_ACTIVE_DBID, COMPACK_DL_ACTIVE,
             COMP_ONLY_DL_ACTIVE,
             ATOMIC_ACTIVE, ATOMIC_WAIT_DBID, WR_PUSH_FWD_WAIT_DBID},
-           EarlyPCrdGrantFromHN) {
+           PCrdGrantFromHN, RETRY_WAIT) {
+  saveRetryState;
   recordPCrdGrant;
+  checkRetryReady;
   popRspInQueue;
 }
 
-transition({REQ_ACTIVE, WR_ACTIVE_DBID, COMPACK_DL_ACTIVE,
-            COMP_ONLY_DL_ACTIVE,
-            ATOMIC_ACTIVE, ATOMIC_WAIT_DBID, WR_PUSH_FWD_WAIT_DBID},
-           RetryAckAfterPCrdGrantFromHN) {
+transition(RETRY_WAIT, RetryAckFromHN) {
   markRetryPending;
-  reissueRequest;
+  checkRetryReady;
   popRspInQueue;
 }
 
-transition(RETRY_WAIT, PCrdGrantRetryReqFromHN, REQ_ACTIVE) {
-  reissueRequest;
+transition(RETRY_WAIT, PCrdGrantFromHN) {
+  recordPCrdGrant;
+  checkRetryReady;
   popRspInQueue;
 }
 
-transition(RETRY_WAIT, PCrdGrantRetryWriteFromHN, WR_ACTIVE_DBID) {
+transition(RETRY_WAIT, RetryReadyReqFromHN, REQ_ACTIVE) {
   reissueRequest;
-  popRspInQueue;
+  popTriggerQueue;
 }
 
-transition(RETRY_WAIT, PCrdGrantRetryCompAckDatalessFromHN,
+transition(RETRY_WAIT, RetryReadyWriteFromHN, WR_ACTIVE_DBID) {
+  reissueRequest;
+  popTriggerQueue;
+}
+
+transition(RETRY_WAIT, RetryReadyCompAckDatalessFromHN,
            COMPACK_DL_ACTIVE) {
   reissueRequest;
-  popRspInQueue;
+  popTriggerQueue;
 }
 
-transition(RETRY_WAIT, PCrdGrantRetryCompOnlyDatalessFromHN,
+transition(RETRY_WAIT, RetryReadyCompOnlyDatalessFromHN,
            COMP_ONLY_DL_ACTIVE) {
   reissueRequest;
-  popRspInQueue;
+  popTriggerQueue;
 }
 
-transition(RETRY_WAIT, PCrdGrantRetryAtomicFromHN, ATOMIC_WAIT_DBID) {
+transition(RETRY_WAIT, RetryReadyAtomicFromHN, ATOMIC_WAIT_DBID) {
   reissueRequest;
-  popRspInQueue;
+  popTriggerQueue;
 }
 
-transition(RETRY_WAIT, PCrdGrantRetryWritePushFromHN,
+transition(RETRY_WAIT, RetryReadyWritePushFromHN,
            WR_PUSH_FWD_WAIT_DBID) {
   reissueRequest;
-  popRspInQueue;
+  popTriggerQueue;
 }
 
 transition(RETRY_WAIT, DatIn_RetryCompDataReq_In, COMPACK_ACTIVE) {
@@ -439,14 +446,6 @@ transition(RETRY_WAIT, RspIn_RetryCompAtomic_In, I) {
   popRspInQueue;
 }
 
-transition({WR_ACTIVE_DBID, WR_WAIT_COMP, COMPACK_ACTIVE,
-            ATOMIC_WAIT_DBID,
-            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
-           PCrdGrantFromHN) {
-  clearRetryState;
-  popRspInQueue;
-}
-
 ////////////////////////////////////////////////////////////////////////////
 // Outbound write flow: local RN -> C2CG -> C2C -> remote HN
 // Consume: REQ credit on send
@@ -454,9 +453,7 @@ transition({WR_ACTIVE_DBID, WR_WAIT_COMP, COMPACK_ACTIVE,
 ////////////////////////////////////////////////////////////////////////////
 
 // All write requests first wait for DBID or an evict/clean early Comp.
-transition(I, {OutReq_WritePull, OutReq_WriteBackFull,
-               OutReq_WriteEvictFull, OutReq_WriteCleanFull,
-               OutReq_WriteCleanNoPush}, WR_ACTIVE_DBID) {
+transition(I, OutReq_Write, WR_ACTIVE_DBID) {
   allocateTBE;
   setOutbound;
   recordLocalIDs_fromReq;
@@ -468,7 +465,7 @@ transition(I, {OutReq_WritePull, OutReq_WriteBackFull,
 // Inbound write flow: remote RN -> peer C2CG -> C2C -> this C2CG -> local HN
 // Return: REQ credit on C2C RX REQ dequeue
 // Consume: RSP/DAT credit on send to C2C TX
-transition(I, {InReq_Write, InReq_EvictWrite}, WR_ACTIVE_DBID) {
+transition(I, InReq_Write, WR_ACTIVE_DBID) {
   allocateTBE;
   recordRemoteIDs_fromC2CReq;
   forwardC2CReqToLocal;
@@ -648,8 +645,7 @@ transition(COMP_ONLY_DL_ACTIVE, RspIn_Comp_In, I) {
 // Return: RSP/DAT credit on C2C RX dequeue
 ////////////////////////////////////////////////////////////////////////////
 
-transition(I, {OutReq_AtomicStore, OutReq_AtomicLoad},
-           ATOMIC_WAIT_DBID) {
+transition(I, OutReq_Atomic, ATOMIC_WAIT_DBID) {
   allocateTBE;
   setOutbound;
   recordLocalIDs_fromReq;
@@ -917,9 +913,7 @@ transition(DVM_WAIT_COMP, RspIn_SnpResp_Out, I) {
 ////////////////////////////////////////////////////////////////////////////
 
 // Only WriteNoSnp/WriteUnique writes use the generic WritePush source flow.
-transition(I, {OutReq_WriteNoSnpFull, OutReq_WriteNoSnpPtl,
-         OutReq_WriteUniqueFull, OutReq_WriteUniquePtl},
-           WR_PUSH_WAIT_DATA) {
+transition(I, OutReq_WritePush, WR_PUSH_WAIT_DATA) {
   allocateTBE;
   setOutbound;
   recordLocalIDs_fromReq;
@@ -1064,12 +1058,8 @@ transition({REQ_ACTIVE, ACTIVE_WAIT_SEP,
             WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
             WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
            {OutReq_Read, OutReq_CleanUnique, OutReq_Evict,
-            OutReq_WriteUniqueFull, OutReq_WriteUniquePtl,
-            OutReq_WriteBackFull, OutReq_WriteCleanFull,
-            OutReq_WriteEvictFull, OutReq_WriteNoSnpFull,
-            OutReq_WriteNoSnpPtl,
-            OutReq_WritePull, OutReq_WriteCleanNoPush,
-            OutReq_AtomicStore, OutReq_AtomicLoad}) {
+            OutReq_Write, OutReq_WritePush,
+            OutReq_Atomic}) {
   stallRequestQueue;
 }
 
@@ -1082,7 +1072,7 @@ transition({REQ_ACTIVE, ACTIVE_WAIT_SEP,
             DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
             WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
             WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
-           {InReq_Read, InReq_Write, InReq_EvictWrite,
-            InReq_CleanUnique, InReq_Evict, InReq_Atomic}) {
+           {InReq_Read, InReq_Write, InReq_CleanUnique,
+            InReq_Evict, InReq_Atomic}) {
   stallC2CRxReqQueue;
 }

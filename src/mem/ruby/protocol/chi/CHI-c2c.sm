@@ -224,23 +224,14 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     OutReq_Read,                 desc="Read request for remote address";
     OutReq_MergeReadShared,      desc="Merge local ReadShared with active read";
     OutReq_CleanUnique,          desc="CleanUnique for remote address";
-    OutReq_WriteUniqueFull,      desc="WriteUniqueFull for remote";
-    OutReq_WriteUniquePtl,       desc="WriteUniquePtl for remote";
-    OutReq_WriteBackFull,        desc="WriteBackFull for remote";
-    OutReq_WriteCleanFull,       desc="WriteCleanFull for remote";
-    OutReq_WriteEvictFull,       desc="WriteEvictFull for remote";
-    OutReq_WriteNoSnpFull,       desc="WriteNoSnpFull for remote";
-    OutReq_WriteNoSnpPtl,        desc="WriteNoSnpPtl for remote";
-    OutReq_WritePull,            desc="Write via WritePull (push disabled)";
-    OutReq_WriteCleanNoPush,     desc="WriteCleanFull with WritePush disabled";
+    OutReq_Write,                desc="DBID-gated write for remote address";
+    OutReq_WritePush,            desc="Source-side WritePush for remote address";
     OutReq_Evict,                desc="Evict for remote";
-    OutReq_AtomicStore,          desc="AtomicNoReturn for remote";
-    OutReq_AtomicLoad,           desc="AtomicReturn for remote";
+    OutReq_Atomic,               desc="AtomicReturn/AtomicNoReturn for remote";
 
     // Inbound request events (C2C -> local NoC)
     InReq_Read,                  desc="Inbound read from remote";
     InReq_Write,                 desc="Inbound write from remote";
-    InReq_EvictWrite,            desc="Inbound evict/clean write from remote";
     InReq_CleanUnique,           desc="Inbound CleanUnique from remote";
     InReq_Evict,                 desc="Inbound Evict from remote";
     InReq_Atomic,                desc="Inbound atomic from remote";
@@ -318,17 +309,15 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     // Retry handling
     RetryAckFromHN,              desc="RetryAck from local HN (absorb)";
     PCrdGrantFromHN,             desc="PCrdGrant from local HN";
-    PCrdGrantRetryReqFromHN,     desc="PCrdGrant resumes retried request";
-    PCrdGrantRetryWriteFromHN,   desc="PCrdGrant resumes retried write";
-    PCrdGrantRetryCompAckDatalessFromHN,
-         desc="PCrdGrant resumes retried CompAck-gated dataless request";
-    PCrdGrantRetryCompOnlyDatalessFromHN,
-         desc="PCrdGrant resumes retried Comp-only dataless request";
-    PCrdGrantRetryAtomicFromHN,  desc="PCrdGrant resumes retried atomic";
-    PCrdGrantRetryWritePushFromHN,
-         desc="PCrdGrant resumes retried WritePush receiver";
-    EarlyPCrdGrantFromHN,        desc="PCrdGrant from local HN before RetryAck";
-    RetryAckAfterPCrdGrantFromHN, desc="RetryAck from local HN after PCrdGrant";
+    RetryReadyReqFromHN,         desc="RetryAck and PCrdGrant resume request";
+    RetryReadyWriteFromHN,       desc="RetryAck and PCrdGrant resume write";
+    RetryReadyCompAckDatalessFromHN,
+         desc="RetryAck and PCrdGrant resume CompAck-gated dataless request";
+    RetryReadyCompOnlyDatalessFromHN,
+         desc="RetryAck and PCrdGrant resume Comp-only dataless request";
+    RetryReadyAtomicFromHN,      desc="RetryAck and PCrdGrant resume atomic";
+    RetryReadyWritePushFromHN,
+         desc="RetryAck and PCrdGrant resume WritePush receiver";
     SendRetryAck,                desc="Send RetryAck to requester";
     SendPCrdGrant,               desc="Send PCrdGrant to requester";
 
@@ -376,6 +365,12 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
       desc="Original local snoop responders to forward back over C2C";
     NetDest snpDataRespondersSeen,
       desc="Snoop data responders already counted";
+    bool allowMultipleSnpDataResponders,
+      desc="Snoop flow may receive data from multiple responders";
+    bool hasSnpDataCopyResponder,
+      desc="A responder has been selected for data mask tracking";
+    MachineID snpDataCopyResponder,
+      desc="Responder whose data flits are tracked in dataBlkValid";
     bool retryPending,          desc="HN sent RetryAck";
     bool retryGrantPending,     desc="HN sent PCrdGrant";
     State retryState,           desc="State to resume after PCrdGrant";
