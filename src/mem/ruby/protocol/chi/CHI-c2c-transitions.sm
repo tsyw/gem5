@@ -783,35 +783,19 @@ transition(I, OutSnp_Forward, SNP_WAIT_RESP) {
   popSnpInQueue;
 }
 
-transition(SNP_WAIT_RESP, RspIn_SnpResp_More_Out) {
+transition(SNP_WAIT_RESP, RspIn_SnpResp_Out) {
   recordSnpRespNoData;
   forwardC2CSnpRspToLocal;
   returnRspCredit;
+  checkSnpTBEComplete;
   popC2CRxRspQueue;
 }
 
-// Snoop response (no data) from remote (C2C RX RSP -> return RSP credit)
-transition(SNP_WAIT_RESP, RspIn_SnpResp_Out, I) {
-  recordSnpRespNoData;
-  forwardC2CSnpRspToLocal;
-  returnRspCredit;
-  deallocateSnpTBE;
-  popC2CRxRspQueue;
-}
-
-transition(SNP_WAIT_RESP, DatIn_SnpRespData_More_Out) {
+transition(SNP_WAIT_RESP, DatIn_SnpRespData_Out) {
   recordSnpRespDataFromC2C;
   forwardC2CSnpDatToLocal;
   returnDatCredit;
-  popC2CRxDatQueue;
-}
-
-// Snoop response with data from remote (C2C RX DAT -> return DAT credit)
-transition(SNP_WAIT_RESP, DatIn_SnpRespData_Out, I) {
-  recordSnpRespDataFromC2C;
-  forwardC2CSnpDatToLocal;
-  returnDatCredit;
-  deallocateSnpTBE;
+  checkSnpTBEComplete;
   popC2CRxDatQueue;
 }
 
@@ -826,36 +810,25 @@ transition(I, InSnp_Deliver, SNP_WAIT_RESP) {
   popC2CRxSnpQueue;
 }
 
-transition(SNP_WAIT_RESP, RspIn_SnpResp_More_In) {
+transition(SNP_WAIT_RESP, RspIn_SnpResp_In) {
   recordSnpRespNoData;
   consumeRspCredit;
   forwardLocalSnpRspToC2C;
+  checkSnpTBEComplete;
   popRspInQueue;
 }
 
-// Inbound snoop response (no data) from local cache
-transition(SNP_WAIT_RESP, RspIn_SnpResp_In, I) {
-  recordSnpRespNoData;
-  consumeRspCredit;
-  forwardLocalSnpRspToC2C;
-  deallocateSnpTBE;
-  popRspInQueue;
-}
-
-transition(SNP_WAIT_RESP, DatIn_SnpRespData_More_In) {
+transition(SNP_WAIT_RESP, DatIn_SnpRespData_In) {
   recordSnpRespDataFromLocal;
   consumeDatCredit;
   forwardLocalSnpDatToC2C;
+  checkSnpTBEComplete;
   popDatInQueue;
 }
 
-// Inbound snoop response with data from local cache
-transition(SNP_WAIT_RESP, DatIn_SnpRespData_In, I) {
-  recordSnpRespDataFromLocal;
-  consumeDatCredit;
-  forwardLocalSnpDatToC2C;
+transition(SNP_WAIT_RESP, SnpTBEComplete, I) {
   deallocateSnpTBE;
-  popDatInQueue;
+  popTriggerQueue;
 }
 
 ////////////////////////////////////////////////////////////////////////////

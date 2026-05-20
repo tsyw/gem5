@@ -80,13 +80,7 @@ in_port(c2cRxRspInPort, CHIResponseMsg, c2cRxRsp, rank=12,
           tbe := snpTBEs[in_msg.addr];
           assert(is_valid(tbe));
           assert(tbe.state == State:SNP_WAIT_RESP);
-          bool finalSnpResp := (tbe.pendingSnpResps == 1) &&
-              (tbe.dataBlkValid.isEmpty() || tbe.dataBlkValid.isFull());
-          if (finalSnpResp) {
-            trigger(Event:RspIn_SnpResp_Out, in_msg.addr, tbe);
-          } else {
-            trigger(Event:RspIn_SnpResp_More_Out, in_msg.addr, tbe);
-          }
+          trigger(Event:RspIn_SnpResp_Out, in_msg.addr, tbe);
         }
       } else if (in_msg.type == CHIResponseType:CompAck) {
         tbe := lookupTBEByC2CInScoped(in_msg.c2cSrcGateway,
@@ -149,24 +143,7 @@ in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
         TBE tbe := snpTBEs[in_msg.addr];
         assert(is_valid(tbe));
         assert(tbe.state == State:SNP_WAIT_RESP);
-        WriteMask combinedMask := tbe.dataBlkValid;
-        bool firstResponderData :=
-          tbe.snpDataRespondersSeen.isElement(in_msg.responder) == false;
-        int pendingAfter := tbe.pendingSnpResps;
-        if ((firstResponderData == true) && (pendingAfter > 0)) {
-          pendingAfter := pendingAfter - 1;
-        }
-        if ((tbe.hasSnpDataCopyResponder == false) ||
-            (tbe.snpDataCopyResponder == in_msg.responder)) {
-          combinedMask.orMask(in_msg.bitMask);
-        }
-        bool finalData := (pendingAfter == 0) &&
-          (combinedMask.isEmpty() || combinedMask.isFull());
-        if (finalData) {
-          trigger(Event:DatIn_SnpRespData_Out, in_msg.addr, tbe);
-        } else {
-          trigger(Event:DatIn_SnpRespData_More_Out, in_msg.addr, tbe);
-        }
+        trigger(Event:DatIn_SnpRespData_Out, in_msg.addr, tbe);
       } else if (isWriteDataType(in_msg.type)) {
         TBE tbe := lookupTBEByC2CInScoped(in_msg.c2cSrcGateway,
                                           in_msg.txnId, in_msg.addr);
@@ -296,11 +273,8 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
                   "rspInPort: absorb stale snoop response addr=%#x type=%s responder=%s state=%s\n",
                   in_msg.addr, in_msg.type, in_msg.responder, tbe.state);
           rspInPort.dequeue(clockEdge());
-        } else if ((tbe.pendingSnpResps == 1) &&
-            (tbe.dataBlkValid.isEmpty() || tbe.dataBlkValid.isFull())) {
-          trigger(Event:RspIn_SnpResp_In, in_msg.addr, tbe);
         } else {
-          trigger(Event:RspIn_SnpResp_More_In, in_msg.addr, tbe);
+          trigger(Event:RspIn_SnpResp_In, in_msg.addr, tbe);
         }
       } else {
         TBE tbe := lookupTBEByLocal(in_msg.responder, in_msg.txnId,
@@ -388,27 +362,7 @@ in_port(datInPort, CHIDataMsg, datIn, rank=9,
                   in_msg.addr, in_msg.type, in_msg.responder, tbe.state);
           datInPort.dequeue(clockEdge());
         } else {
-          bool firstResponderData :=
-            tbe.snpDataRespondersSeen.isElement(in_msg.responder) == false;
-          int pendingAfter := tbe.pendingSnpResps;
-          if ((firstResponderData == true) && (pendingAfter > 0)) {
-            pendingAfter := pendingAfter - 1;
-          }
-          WriteMask combinedMask := tbe.dataBlkValid;
-          if ((tbe.c2cSnpForwardDests.count() == 0) ||
-              tbe.c2cSnpForwardDests.isElement(in_msg.responder)) {
-            if ((tbe.hasSnpDataCopyResponder == false) ||
-                (tbe.snpDataCopyResponder == in_msg.responder)) {
-              combinedMask.orMask(in_msg.bitMask);
-            }
-          }
-          bool finalData := (pendingAfter == 0) &&
-            (combinedMask.isEmpty() || combinedMask.isFull());
-          if (finalData) {
-            trigger(Event:DatIn_SnpRespData_In, in_msg.addr, tbe);
-          } else {
-            trigger(Event:DatIn_SnpRespData_More_In, in_msg.addr, tbe);
-          }
+          trigger(Event:DatIn_SnpRespData_In, in_msg.addr, tbe);
         }
       } else {
         TBE tbe := lookupTBEByLocal(in_msg.responder, in_msg.txnId,
@@ -504,8 +458,7 @@ in_port(c2cRxSnpInPort, CHIRequestMsg, c2cRxSnp, rank=7) {
                                   cyclesToTicks(stall_recycle_lat));
         } else {
           storSnpTBEs.incrementReserved();
-          trigger(Event:InSnp_Deliver, in_msg.addr,
-                  snpTBEs[in_msg.addr]);
+          trigger(Event:InSnp_Deliver, in_msg.addr, nullTBE());
         }
       }
     }
@@ -564,8 +517,7 @@ in_port(snpInPort, CHIRequestMsg, snpIn, rank=6) {
                           cyclesToTicks(stall_recycle_lat));
       } else {
         storSnpTBEs.incrementReserved();
-        trigger(Event:OutSnp_Forward, in_msg.addr,
-                snpTBEs[in_msg.addr]);
+        trigger(Event:OutSnp_Forward, in_msg.addr, nullTBE());
       }
     }
   }
@@ -586,7 +538,11 @@ in_port(triggerInPort, TriggerMsg, triggerQueue, rank=4) {
   if (triggerInPort.isReady(clockEdge())) {
     printResources();
     peek(triggerInPort, TriggerMsg) {
-      trigger(in_msg.event, in_msg.addr, TBEs[in_msg.tbeKey]);
+      TBE trigger_tbe := TBEs[in_msg.tbeKey];
+      if (in_msg.event == Event:SnpTBEComplete) {
+        trigger_tbe := snpTBEs[in_msg.addr];
+      }
+      trigger(in_msg.event, in_msg.addr, trigger_tbe);
     }
   }
 }

@@ -447,6 +447,19 @@ action(recordSnpRespDataFromLocal, "rsnpdloc",
   }
 }
 
+action(checkSnpTBEComplete, "csnpc",
+       desc="Trigger snoop TBE deallocation once responses are complete") {
+  assert(is_valid(tbe));
+  if ((tbe.pendingSnpResps == 0) &&
+      (tbe.dataBlkValid.isEmpty() || tbe.dataBlkValid.isFull())) {
+    enqueue(triggerOutPort, TriggerMsg, 0) {
+      out_msg.addr := address;
+      out_msg.tbeKey := tbeKey(tbe);
+      out_msg.event := Event:SnpTBEComplete;
+    }
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////
 // Outbound forwarding to C2C link
 ////////////////////////////////////////////////////////////////////////////

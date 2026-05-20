@@ -251,10 +251,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     RspIn_CompAck,               desc="CompAck received (legacy)";
     RspIn_ReadReceipt,           desc="ReadReceipt received (legacy)";
     RspIn_RespSepData,           desc="RespSepData (split comp) received (legacy)";
-    RspIn_SnpResp_Out,           desc="Final snoop response from C2C RX";
-    RspIn_SnpResp_More_Out,      desc="Non-final snoop response from C2C RX";
-    RspIn_SnpResp_In,            desc="Final snoop response from local NoC";
-    RspIn_SnpResp_More_In,       desc="Non-final snoop response from local NoC";
+    RspIn_SnpResp_Out,           desc="Snoop response from C2C RX";
+    RspIn_SnpResp_In,            desc="Snoop response from local NoC";
 
     // Response events — directional (_Out = C2C RX or outbound context,
     //                               _In  = NoC RSP or inbound context)
@@ -286,10 +284,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     DatIn_WrReqData,             desc="WrReqDataS/L received from C2C";
 
     // Data events — directional
-    DatIn_SnpRespData_Out,       desc="Final SnpRespData from C2C RX";
-    DatIn_SnpRespData_More_Out,  desc="Non-final SnpRespData from C2C RX";
-    DatIn_SnpRespData_In,        desc="Final SnpRespData from local NoC";
-    DatIn_SnpRespData_More_In,   desc="Non-final SnpRespData from local NoC";
+    DatIn_SnpRespData_Out,       desc="SnpRespData from C2C RX";
+    DatIn_SnpRespData_In,        desc="SnpRespData from local NoC";
     DatIn_CompData_Out,          desc="CompData from C2C RX (outbound read response)";
     DatIn_CompData_In,           desc="CompData from local HN (inbound read response)";
     DatIn_RetryCompDataReq_In,   desc="CompData completing retried inbound read";
@@ -323,6 +319,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
     // Internal completion trigger
     CompleteTxn,                 desc="All flits done, deallocate TBE";
+    SnpTBEComplete,              desc="All snoop responses done";
   }
 
 
