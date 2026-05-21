@@ -362,6 +362,14 @@ bool isWriteDataType(CHIDataType type) {
           (type == CHIDataType:NCBWrData));
 }
 
+TBE lookupNoCDataTBE(CHIDataType type, MachineID responder,
+                     Addr txnId, Addr addr), return_by_pointer="yes" {
+  if (isWriteDataType(type)) {
+    return lookupTBEByLocal(responder, txnId, addr);
+  }
+  return lookupTBEByLocalTxn(txnId, addr);
+}
+
 // Determine if a request type is a read
 bool isReadRequest(CHIRequestType type) {
   if ((type == CHIRequestType:ReadShared) ||
@@ -577,6 +585,7 @@ void clearTBEDefaults(TBE tbe) {
   tbe.rxtxBytes := 0;
   tbe.dataBytesExpected := blockSize;
   tbe.pendingSnpResps := 0;
+  tbe.pendingSnpDataBytes := 0;
   tbe.c2cSnpResponsesToForward := 0;
   tbe.c2cSnpForwardDests.clear();
   tbe.snpDataRespondersSeen.clear();
@@ -691,6 +700,60 @@ Event dataToEventIn(CHIDataType type) {
     return Event:DatIn_NCBWrData_In;
   } else {
     error("Invalid CHIDataType for dataToEventIn");
+  }
+}
+
+Event rspInDispatchEvent(CHIResponseType type, TBE tbe) {
+  assert(is_valid(tbe));
+  if (isSnpRespType(type)) {
+    assert(tbe.state == State:SNP_WAIT_RESP);
+    return Event:RspIn_SnpResp_In;
+  } else if (tbe.isOutbound) {
+    return respToEventOut(type);
+  } else {
+    Event ev := respToEventIn(type);
+    if (tbe.state == State:RETRY_WAIT) {
+      if (ev == Event:RspIn_CompDBIDResp_In) {
+        error("rspInDispatchEvent: CompDBIDResp in RETRY_WAIT");
+      } else if (ev == Event:RspIn_Comp_In) {
+        if (tbe.retryState == State:WR_PUSH_FWD_WAIT_DBID) {
+          return Event:RspIn_RetryCompWritePush_In;
+        } else if (tbe.isWrite) {
+          return Event:RspIn_RetryCompWrite_In;
+        } else if (tbe.isDataless &&
+                   needsRequesterCompAck(tbe.reqType)) {
+          return Event:RspIn_RetryCompAckDataless_In;
+        } else if (tbe.isDataless) {
+          return Event:RspIn_RetryCompOnlyDataless_In;
+        } else if (tbe.isAtomic) {
+          return Event:RspIn_RetryCompAtomic_In;
+        }
+      }
+    }
+    return ev;
+  }
+}
+
+Event datInDispatchEvent(CHIDataType type, TBE tbe) {
+  assert(is_valid(tbe));
+  if (isSnpRespDataType(type)) {
+    assert(tbe.state == State:SNP_WAIT_RESP);
+    return Event:DatIn_SnpRespData_In;
+  } else if (tbe.isOutbound) {
+    return dataToEventOut(type);
+  } else if (isWriteDataType(type)) {
+    error("datInDispatchEvent: write data matched inbound TBE");
+  } else {
+    Event ev := dataToEventIn(type);
+    if ((tbe.state == State:RETRY_WAIT) &&
+        (ev == Event:DatIn_CompData_In)) {
+      if (tbe.isRead) {
+        return Event:DatIn_RetryCompDataReq_In;
+      } else if (tbe.isAtomic) {
+        return Event:DatIn_RetryCompDataAtomic_In;
+      }
+    }
+    return ev;
   }
 }
 

@@ -270,8 +270,6 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     RspIn_RespSepData_In,        desc="RespSepData from local HN (inbound)";
     RspIn_RetryCompWrite_In,     desc="Comp completing retried inbound write";
     RspIn_RetryCompWritePush_In, desc="Comp completing retried inbound WritePush receiver";
-        RspIn_StaleRetryCompDBIDResp_In,
-          desc="Stale CompDBIDResp observed while retrying inbound request";
     RspIn_RetryCompAckDataless_In,
              desc="Comp completing retried CompAck-gated dataless request";
     RspIn_RetryCompOnlyDataless_In,
@@ -297,7 +295,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     DatIn_NCBWrData_In,          desc="NCBWrData from remote via C2C RX (inbound)";
 
     // Retry handling
-    RetryAckFromHN,              desc="RetryAck from local HN (absorb)";
+    RetryAckFromHN,              desc="RetryAck from local HN";
     PCrdGrantFromHN,             desc="PCrdGrant from local HN";
     RetryReadyReqFromHN,         desc="RetryAck and PCrdGrant resume request";
     RetryReadyWriteFromHN,       desc="RetryAck and PCrdGrant resume write";
@@ -353,6 +351,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     bool sepReadCompleteTriggered,
       desc="Separated read completion trigger already queued";
     int pendingSnpResps,        desc="Outstanding snoop responses";
+    int pendingSnpDataBytes,    desc="Outstanding snoop response data bytes";
     int c2cSnpResponsesToForward,
       desc="Inbound snoop responses to forward back over C2C";
     NetDest c2cSnpForwardDests,
@@ -513,7 +512,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   int outboundReqCount, default="0";
   int inboundReqCount,  default="0";
   int snpForwardCount,  default="0";
-  int retryAbsorbCount, default="0";
+  int retryAckCount, default="0";
   int tbeFullRetries,   default="0";
   int writePushCount,   default="0";
   int dvmReqsSent,      default="0";

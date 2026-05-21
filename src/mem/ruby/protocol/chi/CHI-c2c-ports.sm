@@ -173,129 +173,16 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
           (in_msg.type == CHIResponseType:PCrdGrant)) {
         TBE tbe := lookupTBEByLocal(in_msg.responder, in_msg.txnId,
                   in_msg.addr);
-        if (is_valid(tbe) && (tbe.isOutbound == false) &&
-            (in_msg.txnId == tbe.txnID)) {
-          bool retryHandshakeState :=
-            (tbe.state == State:REQ_ACTIVE) ||
-            (tbe.state == State:WR_ACTIVE_DBID) ||
-            (tbe.state == State:COMPACK_DL_ACTIVE) ||
-            (tbe.state == State:COMP_ONLY_DL_ACTIVE) ||
-            (tbe.state == State:ATOMIC_ACTIVE) ||
-            (tbe.state == State:ATOMIC_WAIT_DBID) ||
-            (tbe.state == State:WR_PUSH_FWD_WAIT_DBID) ||
-            (tbe.state == State:RETRY_WAIT);
-          if (retryHandshakeState == false) {
-            DPRINTF(RubySlicc,
-                    "rspInPort: absorb stale retry/grant addr=%#x type=%s txnId=%#x state=%s tbeTxnID=%#x outbound=%d retryPending=%d retryGrantPending=%d\n",
-                    in_msg.addr, in_msg.type, in_msg.txnId,
-                    tbe.state, tbe.txnID, tbe.isOutbound,
-                    tbe.retryPending, tbe.retryGrantPending);
-            rspInPort.dequeue(clockEdge());
-          } else if (in_msg.type == CHIResponseType:RetryAck) {
-            if (tbe.retryPending == false) {
-              trigger(Event:RetryAckFromHN, in_msg.addr, tbe);
-            } else {
-              DPRINTF(RubySlicc,
-                      "rspInPort: absorb duplicate retry/grant addr=%#x type=%s txnId=%#x state=%s tbeTxnID=%#x outbound=%d retryPending=%d retryGrantPending=%d\n",
-                      in_msg.addr, in_msg.type, in_msg.txnId,
-                      tbe.state, tbe.txnID, tbe.isOutbound,
-                      tbe.retryPending, tbe.retryGrantPending);
-              rspInPort.dequeue(clockEdge());
-            }
-          } else {
-            if (tbe.retryGrantPending == false) {
-              trigger(Event:PCrdGrantFromHN, in_msg.addr, tbe);
-            } else {
-              DPRINTF(RubySlicc,
-                      "rspInPort: absorb duplicate retry/grant addr=%#x type=%s txnId=%#x state=%s tbeTxnID=%#x outbound=%d retryPending=%d retryGrantPending=%d\n",
-                      in_msg.addr, in_msg.type, in_msg.txnId,
-                      tbe.state, tbe.txnID, tbe.isOutbound,
-                      tbe.retryPending, tbe.retryGrantPending);
-              rspInPort.dequeue(clockEdge());
-            }
-          }
-        } else {
-          if (is_valid(tbe)) {
-            DPRINTF(RubySlicc,
-                    "rspInPort: absorb stale retry/grant addr=%#x type=%s txnId=%#x state=%s tbeTxnID=%#x outbound=%d retryPending=%d retryGrantPending=%d\n",
-                    in_msg.addr, in_msg.type, in_msg.txnId,
-                    tbe.state, tbe.txnID, tbe.isOutbound,
-                    tbe.retryPending, tbe.retryGrantPending);
-          } else {
-            DPRINTF(RubySlicc,
-                    "rspInPort: absorb stale retry/grant addr=%#x type=%s txnId=%#x without active TBE\n",
-                    in_msg.addr, in_msg.type, in_msg.txnId);
-          }
-          rspInPort.dequeue(clockEdge());
-        }
+        trigger(respToEvent(in_msg.type), in_msg.addr, tbe);
       } else if (isSnpRespType(in_msg.type)) {
-        // Snoop responses: check snpTBEs first
         TBE tbe := snpTBEs[in_msg.addr];
-        if (is_valid(tbe) == false) {
-          tbe := lookupTBEByAddress(in_msg.addr);
-        }
-        if (is_valid(tbe) == false) {
-          error("rspInPort: no snoop TBE for response message");
-        }
-        if (tbe.state != State:SNP_WAIT_RESP) {
-          DPRINTF(RubySlicc,
-                  "rspInPort: absorb stale snoop response addr=%#x type=%s responder=%s state=%s\n",
-                  in_msg.addr, in_msg.type, in_msg.responder, tbe.state);
-          rspInPort.dequeue(clockEdge());
-        } else {
-          trigger(Event:RspIn_SnpResp_In, in_msg.addr, tbe);
-        }
+        assert(is_valid(tbe));
+        trigger(rspInDispatchEvent(in_msg.type, tbe), in_msg.addr, tbe);
       } else {
         TBE tbe := lookupTBEByLocal(in_msg.responder, in_msg.txnId,
                                     in_msg.addr);
-        if (is_valid(tbe) == false) {
-          tbe := lookupTBEByLocalTxn(in_msg.txnId, in_msg.addr);
-        }
-        if (is_valid(tbe)) {
-          if (tbe.isOutbound) {
-            // Outbound TBE: CompAck from local RN going to C2C TX
-            trigger(respToEventOut(in_msg.type), in_msg.addr, tbe);
-          } else {
-            // Inbound TBE: Comp/DBIDResp from local HN going to C2C TX
-            Event ev := respToEventIn(in_msg.type);
-            if (tbe.state == State:RETRY_WAIT) {
-              if (ev == Event:RspIn_CompDBIDResp_In) {
-                if (in_msg.stale) {
-                  trigger(Event:RspIn_StaleRetryCompDBIDResp_In,
-                          in_msg.addr, tbe);
-                } else {
-                  error("rspInPort: non-stale CompDBIDResp in RETRY_WAIT");
-                }
-              } else if (ev == Event:RspIn_Comp_In) {
-                if (tbe.retryState == State:WR_PUSH_FWD_WAIT_DBID) {
-                  trigger(Event:RspIn_RetryCompWritePush_In,
-                          in_msg.addr, tbe);
-                } else if (tbe.isWrite) {
-                  trigger(Event:RspIn_RetryCompWrite_In,
-                          in_msg.addr, tbe);
-                } else if (tbe.isDataless &&
-                           needsRequesterCompAck(tbe.reqType)) {
-                  trigger(Event:RspIn_RetryCompAckDataless_In,
-                          in_msg.addr, tbe);
-                } else if (tbe.isDataless) {
-                  trigger(Event:RspIn_RetryCompOnlyDataless_In,
-                          in_msg.addr, tbe);
-                } else if (tbe.isAtomic) {
-                  trigger(Event:RspIn_RetryCompAtomic_In,
-                          in_msg.addr, tbe);
-                } else {
-                  trigger(ev, in_msg.addr, tbe);
-                }
-              } else {
-                trigger(ev, in_msg.addr, tbe);
-              }
-            } else {
-              trigger(ev, in_msg.addr, tbe);
-            }
-          }
-        } else {
-          error("rspInPort: no TBE for response message");
-        }
+        assert(is_valid(tbe));
+        trigger(rspInDispatchEvent(in_msg.type, tbe), in_msg.addr, tbe);
       }
     }
   }
@@ -311,62 +198,23 @@ in_port(datInPort, CHIDataMsg, datIn, rank=9,
   if (datInPort.isReady(clockEdge())) {
     printResources();
     peek(datInPort, CHIDataMsg) {
+      DPRINTF(RubySlicc,
+              "datInPort: addr=%#x type=%s responder=%s txnId=%#x\n",
+              in_msg.addr, in_msg.type, in_msg.responder, in_msg.txnId);
       if (isSnpRespDataType(in_msg.type)) {
-        // Snoop data: non-directional, check snpTBEs first
         TBE tbe := snpTBEs[in_msg.addr];
-        if (is_valid(tbe) == false) {
-          tbe := lookupTBEByAddress(in_msg.addr);
-        }
-        if (is_valid(tbe) == false) {
-          error("datInPort: no snoop TBE for data message");
-        }
-        if (tbe.state != State:SNP_WAIT_RESP) {
-          DPRINTF(RubySlicc,
-                  "datInPort: absorb stale snoop data addr=%#x type=%s responder=%s state=%s\n",
-                  in_msg.addr, in_msg.type, in_msg.responder, tbe.state);
-          datInPort.dequeue(clockEdge());
-        } else {
-          trigger(Event:DatIn_SnpRespData_In, in_msg.addr, tbe);
-        }
+        assert(is_valid(tbe));
+        trigger(datInDispatchEvent(in_msg.type, tbe), in_msg.addr, tbe);
       } else {
-        TBE tbe := lookupTBEByLocal(in_msg.responder, in_msg.txnId,
-                                    in_msg.addr);
-        if (is_valid(tbe) == false) {
-          tbe := lookupTBEByLocalTxn(in_msg.txnId, in_msg.addr);
-        }
-        if (is_valid(tbe)) {
-          if (tbe.isOutbound) {
-            // Outbound TBE: write/atomic data from local RN going to C2C TX
-            if (isWriteDataType(in_msg.type)) {
-              DPRINTF(RubySlicc,
-                      "datInPort outbound: addr=%#x type=%s state=%s reqType=%s storSlot=%d\n",
-                      in_msg.addr, in_msg.type, tbe.state,
-                      tbe.reqType, tbe.storSlot);
-            }
-            trigger(dataToEventOut(in_msg.type), in_msg.addr, tbe);
-          } else if (isWriteDataType(in_msg.type)) {
-            error("datInPort: write data matched inbound TBE");
-          } else {
-            // Inbound TBE: read/atomic response data from local HN going to C2C TX
-            Event ev := dataToEventIn(in_msg.type);
-            if ((tbe.state == State:RETRY_WAIT) &&
-                (ev == Event:DatIn_CompData_In)) {
-              if (tbe.isRead) {
-                trigger(Event:DatIn_RetryCompDataReq_In,
-                        in_msg.addr, tbe);
-              } else if (tbe.isAtomic) {
-                trigger(Event:DatIn_RetryCompDataAtomic_In,
-                        in_msg.addr, tbe);
-              } else {
-                trigger(ev, in_msg.addr, tbe);
-              }
-            } else {
-              trigger(ev, in_msg.addr, tbe);
-            }
-          }
+        TBE tbe := lookupNoCDataTBE(in_msg.type, in_msg.responder,
+                                    in_msg.txnId, in_msg.addr);
+        assert(is_valid(tbe));
+        if (isWriteDataType(in_msg.type)) {
+          assert(tbe.isOutbound);
         } else {
-          error("datInPort: no TBE for data message");
+          assert(tbe.isOutbound == false);
         }
+        trigger(datInDispatchEvent(in_msg.type, tbe), in_msg.addr, tbe);
       }
     }
   }

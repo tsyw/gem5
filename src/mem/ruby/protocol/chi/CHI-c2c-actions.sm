@@ -400,7 +400,9 @@ action(recordSnpRespDataFromC2C, "rsnpdc2c",
        desc="Aggregate snoop response data from C2C") {
   assert(is_valid(tbe));
   peek(c2cRxDatInPort, CHIDataMsg) {
-    tbe.rxtxBytes := tbe.rxtxBytes + data_channel_size;
+    int dataBytes := in_msg.bitMask.count();
+    assert(dataBytes > 0);
+    tbe.rxtxBytes := tbe.rxtxBytes + dataBytes;
     bool firstResponderData :=
       tbe.snpDataRespondersSeen.isElement(in_msg.responder) == false;
     if (firstResponderData) {
@@ -409,8 +411,11 @@ action(recordSnpRespDataFromC2C, "rsnpdc2c",
       }
       assert(tbe.pendingSnpResps > 0);
       tbe.pendingSnpResps := tbe.pendingSnpResps - 1;
+      tbe.pendingSnpDataBytes := tbe.pendingSnpDataBytes + blockSize;
       tbe.snpDataRespondersSeen.add(in_msg.responder);
     }
+    assert(tbe.pendingSnpDataBytes >= dataBytes);
+    tbe.pendingSnpDataBytes := tbe.pendingSnpDataBytes - dataBytes;
     if (tbe.hasSnpDataCopyResponder == false) {
       tbe.hasSnpDataCopyResponder := true;
       tbe.snpDataCopyResponder := in_msg.responder;
@@ -427,7 +432,9 @@ action(recordSnpRespDataFromLocal, "rsnpdloc",
        desc="Aggregate snoop response data from local NoC") {
   assert(is_valid(tbe));
   peek(datInPort, CHIDataMsg) {
-    tbe.rxtxBytes := tbe.rxtxBytes + data_channel_size;
+    int dataBytes := in_msg.bitMask.count();
+    assert(dataBytes > 0);
+    tbe.rxtxBytes := tbe.rxtxBytes + dataBytes;
     bool firstResponderData :=
       tbe.snpDataRespondersSeen.isElement(in_msg.responder) == false;
     if (firstResponderData) {
@@ -436,8 +443,11 @@ action(recordSnpRespDataFromLocal, "rsnpdloc",
       }
       assert(tbe.pendingSnpResps > 0);
       tbe.pendingSnpResps := tbe.pendingSnpResps - 1;
+      tbe.pendingSnpDataBytes := tbe.pendingSnpDataBytes + blockSize;
       tbe.snpDataRespondersSeen.add(in_msg.responder);
     }
+    assert(tbe.pendingSnpDataBytes >= dataBytes);
+    tbe.pendingSnpDataBytes := tbe.pendingSnpDataBytes - dataBytes;
     if ((tbe.c2cSnpForwardDests.count() == 0) ||
         tbe.c2cSnpForwardDests.isElement(in_msg.responder)) {
       if (tbe.hasSnpDataCopyResponder == false) {
@@ -457,6 +467,7 @@ action(checkSnpTBEComplete, "csnpc",
        desc="Trigger snoop TBE deallocation once responses are complete") {
   assert(is_valid(tbe));
   if ((tbe.pendingSnpResps == 0) &&
+  (tbe.pendingSnpDataBytes == 0) &&
       (tbe.dataBlkValid.isEmpty() || tbe.dataBlkValid.isFull())) {
     enqueue(triggerOutPort, TriggerMsg, 0) {
       out_msg.addr := address;
@@ -836,13 +847,15 @@ action(sendPCrdGrant, desc="Send PCrdGrant to retrying requester") {
 
 action(markRetryPending, "mrp", desc="Mark RetryAck pending") {
   assert(is_valid(tbe));
+  assert(tbe.retryPending == false);
   tbe.retryPending := true;
-  retryAbsorbCount := retryAbsorbCount + 1;
+  retryAckCount := retryAckCount + 1;
 }
 
 action(recordPCrdGrant, "rpcg",
        desc="Record PCrdGrant until RetryAck arrives") {
   assert(is_valid(tbe));
+  assert(tbe.retryGrantPending == false);
   tbe.retryGrantPending := true;
 }
 

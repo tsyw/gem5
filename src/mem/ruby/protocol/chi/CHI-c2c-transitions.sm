@@ -412,10 +412,6 @@ transition(RETRY_WAIT, RspIn_RetryCompAckDataless_In, COMPACK_ACTIVE) {
   popRspInQueue;
 }
 
-transition(RETRY_WAIT, RspIn_StaleRetryCompDBIDResp_In) {
-  popRspInQueue;
-}
-
 transition(RETRY_WAIT, RspIn_RetryCompOnlyDataless_In, I) {
   consumeRspCredit;
   forwardLocalRspToC2C;
