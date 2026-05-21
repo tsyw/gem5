@@ -202,55 +202,40 @@ transition(ACTIVE_WAIT_SEP, RspIn_ReadReceipt_In, COMPACK_ACTIVE) {
   popRspInQueue;
 }
 
-// ACTIVE_WAIT_SEP: one half of a separated read has arrived; ports route
-// completion vs more-data events based on TBE flags.
-transition(ACTIVE_WAIT_SEP, DatIn_SepReadData_Done_Out, COMPACK_ACTIVE) {
-  clearExpectingData;
-  trackDatFlit;
+// ACTIVE_WAIT_SEP: one half of a separated read has arrived; actions update
+// the TBE and trigger SepReadComplete once response and data halves are seen.
+transition(ACTIVE_WAIT_SEP,
+           {DatIn_DataSepResp_Out, DatIn_CompData_Out}) {
+  recordSepReadDataHalf;
   forwardC2CDatToLocal;
   returnDatCredit;
-  checkTxnComplete;
+  checkSepReadComplete;
   popC2CRxDatQueue;
 }
 
-transition(ACTIVE_WAIT_SEP, DatIn_SepReadData_Done_In, COMPACK_ACTIVE) {
-  clearExpectingData;
-  trackDatFlit;
+transition(ACTIVE_WAIT_SEP,
+           {DatIn_DataSepResp_In, DatIn_CompData_In}) {
+  recordSepReadDataHalf;
   consumeDatCredit;
   forwardLocalDatToC2C;
-  checkTxnComplete;
+  checkSepReadComplete;
   popDatInQueue;
 }
 
-transition(ACTIVE_WAIT_SEP, RspIn_SepReadResp_Done_Out, COMPACK_ACTIVE) {
-  clearExpectingComp;
+transition(ACTIVE_WAIT_SEP, RspIn_RespSepData_Out) {
+  recordSepReadRespHalf;
   forwardC2CRspToLocal;
   returnRspCredit;
-  checkTxnComplete;
+  checkSepReadComplete;
   popC2CRxRspQueue;
 }
 
-transition(ACTIVE_WAIT_SEP, RspIn_SepReadResp_Done_In, COMPACK_ACTIVE) {
-  clearExpectingComp;
+transition(ACTIVE_WAIT_SEP, RspIn_RespSepData_In) {
+  recordSepReadRespHalf;
   consumeRspCredit;
   forwardLocalRspToC2C;
-  checkTxnComplete;
+  checkSepReadComplete;
   popRspInQueue;
-}
-
-// Multi-flit self-loop: additional data flits while still waiting for RespSepData
-transition(ACTIVE_WAIT_SEP, DatIn_SepReadData_More_Out) {
-  trackDatFlit;
-  forwardC2CDatToLocal;
-  returnDatCredit;
-  popC2CRxDatQueue;
-}
-
-transition(ACTIVE_WAIT_SEP, DatIn_SepReadData_More_In) {
-  trackDatFlit;
-  consumeDatCredit;
-  forwardLocalDatToC2C;
-  popDatInQueue;
 }
 
 // CompAck can arrive after RespSepData, or after the first CompData flit that
@@ -259,7 +244,6 @@ transition(ACTIVE_WAIT_SEP, DatIn_SepReadData_More_In) {
 transition(ACTIVE_WAIT_SEP, RspIn_CompAck_Out) {
   forwardFirstCompAckToC2CTx;
   markCompAckDone;
-  checkTxnComplete;
   popRspInQueue;
 }
 
@@ -267,8 +251,12 @@ transition(ACTIVE_WAIT_SEP, RspIn_CompAck_In) {
   forwardCompAckToHN;
   returnRspCredit;
   markCompAckDone;
-  checkTxnComplete;
   popC2CRxRspQueue;
+}
+
+transition(ACTIVE_WAIT_SEP, SepReadComplete, COMPACK_ACTIVE) {
+  checkTxnComplete;
+  popTriggerQueue;
 }
 
 // COMPACK_ACTIVE: response/data halves observed; remaining data flits and
@@ -923,6 +911,7 @@ transition(WR_PUSH_SENT, RspIn_Comp_Out, I) {
 
 // WrReqDataS/L from C2C -> split: forward REQ to local HN, buffer data
 transition(I, DatIn_WrReqData, WR_PUSH_FWD_WAIT_DBID) {
+  checkAllocateWrReqDataTBE;
   allocateTBE;
   splitWrReqDataToReq;
   returnDatCredit;

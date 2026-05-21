@@ -102,15 +102,7 @@ in_port(c2cRxRspInPort, CHIResponseMsg, c2cRxRsp, rank=12,
                 in_msg.addr, tbe.state, tbe.isOutbound, tbe.storSlot,
                 tbe.localSrcID, tbe.localTxnID,
                 tbe.remoteSrcID, tbe.remoteTxnID);
-        Event ev := respToEventOut(in_msg.type);
-        if ((tbe.state == State:ACTIVE_WAIT_SEP) &&
-            (ev == Event:RspIn_RespSepData_Out) &&
-            tbe.expectingComp) {
-          trigger(Event:RspIn_SepReadResp_Done_Out,
-                  in_msg.addr, tbe);
-        } else {
-          trigger(ev, in_msg.addr, tbe);
-        }
+        trigger(respToEventOut(in_msg.type), in_msg.addr, tbe);
       }
     }
   }
@@ -130,15 +122,8 @@ in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
               "c2cRxDatInPort: addr=%#x type=%s responder=%s txnId=%#x usesTxnId=%d gateway=%s\n",
               in_msg.addr, in_msg.type, in_msg.responder,
               in_msg.txnId, in_msg.usesTxnId, in_msg.c2cSrcGateway);
-      // WritePush WrReqData starts a new transaction: needs TBE slot
       if (isWrReqDataType(in_msg.type)) {
-        if (storTBEs.areNSlotsAvailable(1)) {
-          storTBEs.incrementReserved();
-          trigger(Event:DatIn_WrReqData, in_msg.addr, nullTBE());
-        } else {
-          c2cRxDatInPort.recycle(clockEdge(),
-                                  cyclesToTicks(stall_recycle_lat));
-        }
+        trigger(Event:DatIn_WrReqData, in_msg.addr, nullTBE());
       } else if (isSnpRespDataType(in_msg.type)) {
         TBE tbe := snpTBEs[in_msg.addr];
         assert(is_valid(tbe));
@@ -164,23 +149,7 @@ in_port(c2cRxDatInPort, CHIDataMsg, c2cRxDat, rank=11,
                 in_msg.addr, tbe.state, tbe.isOutbound, tbe.storSlot,
                 tbe.localSrcID, tbe.localTxnID,
                 tbe.remoteSrcID, tbe.remoteTxnID);
-        Event ev := dataToEventOut(in_msg.type);
-        if (tbe.state == State:ACTIVE_WAIT_SEP) {
-          if (tbe.expectingData &&
-              (ev == Event:DatIn_DataSepResp_Out)) {
-            trigger(Event:DatIn_SepReadData_Done_Out,
-                    in_msg.addr, tbe);
-          } else if (tbe.expectingComp &&
-                     ((ev == Event:DatIn_CompData_Out) ||
-                      (ev == Event:DatIn_DataSepResp_Out))) {
-            trigger(Event:DatIn_SepReadData_More_Out,
-                    in_msg.addr, tbe);
-          } else {
-            trigger(ev, in_msg.addr, tbe);
-          }
-        } else {
-          trigger(ev, in_msg.addr, tbe);
-        }
+        trigger(dataToEventOut(in_msg.type), in_msg.addr, tbe);
       }
     }
   }
@@ -289,12 +258,7 @@ in_port(rspInPort, CHIResponseMsg, rspIn, rank=10,
           } else {
             // Inbound TBE: Comp/DBIDResp from local HN going to C2C TX
             Event ev := respToEventIn(in_msg.type);
-            if ((tbe.state == State:ACTIVE_WAIT_SEP) &&
-                (ev == Event:RspIn_RespSepData_In) &&
-                tbe.expectingComp) {
-              trigger(Event:RspIn_SepReadResp_Done_In,
-                      in_msg.addr, tbe);
-            } else if (tbe.state == State:RETRY_WAIT) {
+            if (tbe.state == State:RETRY_WAIT) {
               if (ev == Event:RspIn_CompDBIDResp_In) {
                 if (in_msg.stale) {
                   trigger(Event:RspIn_StaleRetryCompDBIDResp_In,
@@ -385,21 +349,8 @@ in_port(datInPort, CHIDataMsg, datIn, rank=9,
           } else {
             // Inbound TBE: read/atomic response data from local HN going to C2C TX
             Event ev := dataToEventIn(in_msg.type);
-            if (tbe.state == State:ACTIVE_WAIT_SEP) {
-              if (tbe.expectingData &&
-                  (ev == Event:DatIn_DataSepResp_In)) {
-                trigger(Event:DatIn_SepReadData_Done_In,
-                        in_msg.addr, tbe);
-              } else if (tbe.expectingComp &&
-                         ((ev == Event:DatIn_CompData_In) ||
-                          (ev == Event:DatIn_DataSepResp_In))) {
-                trigger(Event:DatIn_SepReadData_More_In,
-                        in_msg.addr, tbe);
-              } else {
-                trigger(ev, in_msg.addr, tbe);
-              }
-            } else if ((tbe.state == State:RETRY_WAIT) &&
-                       (ev == Event:DatIn_CompData_In)) {
+            if ((tbe.state == State:RETRY_WAIT) &&
+                (ev == Event:DatIn_CompData_In)) {
               if (tbe.isRead) {
                 trigger(Event:DatIn_RetryCompDataReq_In,
                         in_msg.addr, tbe);

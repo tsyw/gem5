@@ -569,6 +569,7 @@ void clearTBEDefaults(TBE tbe) {
   tbe.writeCompReceived := false;
   tbe.expectingData := false;
   tbe.expectingComp := false;
+  tbe.sepReadCompleteTriggered := false;
   tbe.resPlane := 0;
   tbe.usedSharedCredit := false;
   tbe.dataBlk.clear();

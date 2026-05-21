@@ -121,6 +121,12 @@ action(checkAllocateTBE_withCredit, desc="TBE alloc after credit granted") {
   reqInPort.dequeue(clockEdge());
 }
 
+action(checkAllocateWrReqDataTBE,
+       desc="Check TBE availability for inbound WritePush WrReqData") {
+  check_allocate(storTBEs);
+  storTBEs.incrementReserved();
+}
+
 action(allocateTBE, "atbe", desc="Allocate TBE for a transaction") {
   storTBEs.decrementReserved();
   assert(storTBEs.areNSlotsAvailable(1));
@@ -939,6 +945,38 @@ action(setExpectingComp, "seC", desc="Mark TBE as expecting response") {
 action(clearExpectingComp, "ceC", desc="Clear expecting response flag") {
   assert(is_valid(tbe));
   tbe.expectingComp := false;
+}
+
+action(recordSepReadRespHalf, "rsrr",
+       desc="Record separated read response half") {
+  assert(is_valid(tbe));
+  if (tbe.expectingComp) {
+    tbe.expectingComp := false;
+  }
+}
+
+action(recordSepReadDataHalf, "rsrd",
+       desc="Record separated read data flit") {
+  assert(is_valid(tbe));
+  if (tbe.expectingData) {
+    tbe.expectingData := false;
+  }
+  tbe.rxtxBytes := tbe.rxtxBytes + data_channel_size;
+}
+
+action(checkSepReadComplete, "csrc",
+       desc="Trigger once separated read response and data halves are seen") {
+  assert(is_valid(tbe));
+  if ((tbe.expectingData == false) &&
+      (tbe.expectingComp == false) &&
+      (tbe.sepReadCompleteTriggered == false)) {
+    tbe.sepReadCompleteTriggered := true;
+    enqueue(triggerOutPort, TriggerMsg, 0) {
+      out_msg.addr := address;
+      out_msg.tbeKey := tbeKey(tbe);
+      out_msg.event := Event:SepReadComplete;
+    }
+  }
 }
 
 action(recordWriteComp, "rwc", desc="Record that write Comp has arrived") {

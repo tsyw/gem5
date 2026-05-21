@@ -268,8 +268,6 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     RspIn_ReadReceipt_In,        desc="ReadReceipt from local SNF (inbound)";
     RspIn_RespSepData_Out,       desc="RespSepData from C2C RX (outbound)";
     RspIn_RespSepData_In,        desc="RespSepData from local HN (inbound)";
-    RspIn_SepReadResp_Done_Out,  desc="RespSepData completes separated outbound read";
-    RspIn_SepReadResp_Done_In,   desc="RespSepData completes separated inbound read";
     RspIn_RetryCompWrite_In,     desc="Comp completing retried inbound write";
     RspIn_RetryCompWritePush_In, desc="Comp completing retried inbound WritePush receiver";
         RspIn_StaleRetryCompDBIDResp_In,
@@ -293,10 +291,6 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
              desc="CompData completing retried inbound atomic";
     DatIn_DataSepResp_Out,       desc="DataSepResp from C2C RX (outbound)";
     DatIn_DataSepResp_In,        desc="DataSepResp from local HN (inbound)";
-    DatIn_SepReadData_More_Out,  desc="More separated read data from C2C RX before RespSepData";
-    DatIn_SepReadData_More_In,   desc="More separated read data from local HN before RespSepData";
-    DatIn_SepReadData_Done_Out,  desc="DataSepResp completes separated outbound read";
-    DatIn_SepReadData_Done_In,   desc="DataSepResp completes separated inbound read";
     DatIn_CBWrData_Out,          desc="CBWrData from local RN via NoC (outbound write)";
     DatIn_CBWrData_In,           desc="CBWrData from remote via C2C RX (inbound write)";
     DatIn_NCBWrData_Out,         desc="NCBWrData from local RN via NoC (outbound)";
@@ -319,6 +313,7 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
 
     // Internal completion trigger
     CompleteTxn,                 desc="All flits done, deallocate TBE";
+    SepReadComplete,             desc="Separated read response/data halves observed";
     SnpTBEComplete,              desc="All snoop responses done";
   }
 
@@ -355,6 +350,8 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     MachineType c2cEgressType,  desc="Outbound C2C egress type";
     bool expectingData,         desc="Waiting for separated read data";
     bool expectingComp,         desc="Waiting for separated read response";
+    bool sepReadCompleteTriggered,
+      desc="Separated read completion trigger already queued";
     int pendingSnpResps,        desc="Outstanding snoop responses";
     int c2cSnpResponsesToForward,
       desc="Inbound snoop responses to forward back over C2C";
