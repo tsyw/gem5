@@ -79,7 +79,9 @@ action(returnDatCredit, "retDat",
 ////////////////////////////////////////////////////////////////////////////
 
 action(checkAllocateTBE, desc="Check TBE availability and move to reqRdy") {
-  if (storTBEs.areNSlotsAvailable(1)) {
+  if (coherencyEnabled() == false) {
+    reqInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+  } else if (storTBEs.areNSlotsAvailable(1)) {
     storTBEs.incrementReserved();
     peek(reqInPort, CHIRequestMsg) {
       DPRINTF(RubySlicc,
@@ -109,16 +111,149 @@ action(checkAllocateTBE, desc="Check TBE availability and move to reqRdy") {
 }
 
 action(checkAllocateTBE_withCredit, desc="TBE alloc after credit granted") {
-  peek(reqInPort, CHIRequestMsg) {
-    assert(in_msg.allowRetry == false);
-    DPRINTF(RubySlicc,
-            "checkAllocateTBE_withCredit: addr=%#x type=%s requestor=%s\n",
-            in_msg.addr, in_msg.type, in_msg.requestor);
-    enqueue(reqRdyOutPort, CHIRequestMsg, 0) {
-      out_msg := in_msg;
+  if (coherencyEnabled() == false) {
+    reqInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+  } else {
+    peek(reqInPort, CHIRequestMsg) {
+      assert(in_msg.allowRetry == false);
+      DPRINTF(RubySlicc,
+              "checkAllocateTBE_withCredit: addr=%#x type=%s requestor=%s\n",
+              in_msg.addr, in_msg.type, in_msg.requestor);
+      enqueue(reqRdyOutPort, CHIRequestMsg, 0) {
+        out_msg := in_msg;
+      }
+    }
+    reqInPort.dequeue(clockEdge());
+  }
+}
+
+action(checkReqCreditAndStage,
+       desc="Check outbound REQ credit and stage for dispatch") {
+  peek(reqRdyInPort, CHIRequestMsg) {
+    if (coherencyEnabled() == false) {
+      reqRdyInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+    } else if (creditMgr.hasReqCredit(0) == false) {
+      DPRINTF(RubySlicc,
+              "checkReqCreditAndStage stall: addr=%#x type=%s requestor=%s\n",
+              in_msg.addr, in_msg.type, in_msg.requestor);
+      creditMgr.recordStall(0);
+      reqRdyInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+    } else {
+      enqueue(reqTxRdyOutPort, CHIRequestMsg, 0) {
+        out_msg := in_msg;
+      }
+      reqRdyInPort.dequeue(clockEdge());
     }
   }
-  reqInPort.dequeue(clockEdge());
+}
+
+action(checkC2CRxReqAndStage,
+       desc="Check inbound C2C REQ resources and stage for dispatch") {
+  peek(c2cRxReqInPort, CHIRequestMsg) {
+    if (coherencyEnabled() == false) {
+      c2cRxReqInPort.recycle(clockEdge(),
+                              cyclesToTicks(stall_recycle_lat));
+    } else if (storTBEs.areNSlotsAvailable(1) == false) {
+      c2cRxReqInPort.recycle(clockEdge(),
+                              cyclesToTicks(stall_recycle_lat));
+    } else {
+      storTBEs.incrementReserved();
+      enqueue(c2cRxReqRdyOutPort, CHIRequestMsg, 0) {
+        out_msg := in_msg;
+      }
+      c2cRxReqInPort.dequeue(clockEdge());
+    }
+  }
+}
+
+action(checkOutSnpAndStage,
+       desc="Check outbound SNP resources/credit and stage for dispatch") {
+  peek(snpInPort, CHIRequestMsg) {
+    if (isDvmSnoop(in_msg.type)) {
+      if (dvmEnabled() == false) {
+        snpInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+      } else if (isDvmP1(in_msg.type)) {
+        int dvmSlotsNeeded := 1;
+        if (isDvmSyncType(in_msg.type) == false) {
+          dvmSlotsNeeded := 2;
+        }
+        if (storDvmTBEs.areNSlotsAvailable(dvmSlotsNeeded) == false) {
+          snpInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+        } else if (creditMgr.hasSnpCredit() == false) {
+          creditMgr.recordStall(1);
+          snpInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+        } else {
+          storDvmTBEs.incrementReserved();
+          enqueue(snpRdyOutPort, CHIRequestMsg, 0) {
+            out_msg := in_msg;
+          }
+          snpInPort.dequeue(clockEdge());
+        }
+      } else {
+        assert(is_valid(dvmTBEs[in_msg.addr]));
+        if (creditMgr.hasSnpCredit() == false) {
+          creditMgr.recordStall(1);
+          snpInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+        } else {
+          enqueue(snpRdyOutPort, CHIRequestMsg, 0) {
+            out_msg := in_msg;
+          }
+          snpInPort.dequeue(clockEdge());
+        }
+      }
+    } else if (coherencyEnabled() == false) {
+      snpInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+    } else if (creditMgr.hasSnpCredit() == false) {
+      creditMgr.recordStall(1);
+      snpInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+    } else if (storSnpTBEs.areNSlotsAvailable(1) == false) {
+      snpInPort.recycle(clockEdge(), cyclesToTicks(stall_recycle_lat));
+    } else {
+      storSnpTBEs.incrementReserved();
+      enqueue(snpRdyOutPort, CHIRequestMsg, 0) {
+        out_msg := in_msg;
+      }
+      snpInPort.dequeue(clockEdge());
+    }
+  }
+}
+
+action(checkInSnpAndStage,
+       desc="Check inbound C2C SNP resources and stage for dispatch") {
+  peek(c2cRxSnpInPort, CHIRequestMsg) {
+    if (coherencyEnabled() == false) {
+      c2cRxSnpInPort.recycle(clockEdge(),
+                              cyclesToTicks(stall_recycle_lat));
+    } else if (isDvmSnoop(in_msg.type)) {
+      if (isDvmP1(in_msg.type)) {
+        if (storDvmTBEs.areNSlotsAvailable(1) == false) {
+          c2cRxSnpInPort.recycle(clockEdge(),
+                                  cyclesToTicks(stall_recycle_lat));
+        } else {
+          storDvmTBEs.incrementReserved();
+          enqueue(c2cRxSnpRdyOutPort, CHIRequestMsg, 0) {
+            out_msg := in_msg;
+          }
+          c2cRxSnpInPort.dequeue(clockEdge());
+        }
+      } else {
+        assert(is_valid(dvmTBEs[in_msg.addr]));
+        enqueue(c2cRxSnpRdyOutPort, CHIRequestMsg, 0) {
+          out_msg := in_msg;
+        }
+        c2cRxSnpInPort.dequeue(clockEdge());
+      }
+    } else if (storSnpTBEs.areNSlotsAvailable(1) == false) {
+      c2cRxSnpInPort.recycle(clockEdge(),
+                              cyclesToTicks(stall_recycle_lat));
+    } else {
+      storSnpTBEs.incrementReserved();
+      enqueue(c2cRxSnpRdyOutPort, CHIRequestMsg, 0) {
+        out_msg := in_msg;
+      }
+      c2cRxSnpInPort.dequeue(clockEdge());
+    }
+  }
 }
 
 action(checkAllocateWrReqDataTBE,
@@ -211,7 +346,7 @@ action(deallocateSnpTBE, "dsnptbe", desc="Deallocate snoop TBE") {
 
 action(recordLocalIDs_fromReq, "rlid", desc="Record local IDs from request") {
   assert(is_valid(tbe));
-  peek(reqRdyInPort, CHIRequestMsg) {
+  peek(reqTxRdyInPort, CHIRequestMsg) {
     Addr key := tbeKey(tbe);
     tbe.reqType := in_msg.type;
     tbe.localSrcID := in_msg.requestor;
@@ -274,7 +409,7 @@ action(attachMergedReadFromReq, "amr",
 
 action(recordRemoteIDs_fromC2CReq, "rrid", desc="Record remote IDs from C2C req") {
   assert(is_valid(tbe));
-  peek(c2cRxReqInPort, CHIRequestMsg) {
+  peek(c2cRxReqRdyInPort, CHIRequestMsg) {
     Addr key := tbeKey(tbe);
     tbe.reqType := in_msg.type;
     tbe.remoteSrcID := in_msg.origSrcID;
@@ -311,7 +446,7 @@ action(recordRemoteIDs_fromC2CReq, "rrid", desc="Record remote IDs from C2C req"
 
 action(recordSnpIDs_fromSnp, "rsnpid", desc="Record snoop IDs from local HN") {
   assert(is_valid(tbe));
-  peek(snpInPort, CHIRequestMsg) {
+  peek(snpRdyInPort, CHIRequestMsg) {
     tbe.reqType := in_msg.type;
     tbe.localSrcID := in_msg.requestor;
     tbe.isSnoop := true;
@@ -321,7 +456,7 @@ action(recordSnpIDs_fromSnp, "rsnpid", desc="Record snoop IDs from local HN") {
 action(recordInboundSnpIDs, "ribsnp",
        desc="Record inbound snoop IDs from C2C") {
   assert(is_valid(tbe));
-  peek(c2cRxSnpInPort, CHIRequestMsg) {
+  peek(c2cRxSnpRdyInPort, CHIRequestMsg) {
     tbe.reqType := in_msg.type;
     tbe.peerC2CG := in_msg.c2cSrcGateway;
     tbe.isSnoop := true;
@@ -353,7 +488,7 @@ action(bindLocalDBIDFromSelf, "bldbs",
 action(recordOutboundSnpTargets, "rosnp",
        desc="Record expected responses for outbound snoop") {
   assert(is_valid(tbe));
-  peek(snpInPort, CHIRequestMsg) {
+  peek(snpRdyInPort, CHIRequestMsg) {
     assert(in_msg.hasRmtDest);
     tbe.allowMultipleSnpDataResponders :=
       allowsMultipleSnpDataResponders(in_msg.type, in_msg.retToSrc);
@@ -370,7 +505,7 @@ action(recordOutboundSnpTargets, "rosnp",
 action(recordInboundSnpTargets, "risnp",
        desc="Record expected responses for inbound snoop") {
   assert(is_valid(tbe));
-  peek(c2cRxSnpInPort, CHIRequestMsg) {
+  peek(c2cRxSnpRdyInPort, CHIRequestMsg) {
     tbe.c2cSnpForwardDests.clear();
     assert(in_msg.hasRmtDest);
     tbe.allowMultipleSnpDataResponders :=
@@ -484,7 +619,7 @@ action(checkSnpTBEComplete, "csnpc",
 action(forwardReqToC2CTx, "fwdReqC2C", desc="Forward request to C2C TX REQ") {
   assert(is_valid(tbe));
   outboundReqCount := outboundReqCount + 1;
-  peek(reqRdyInPort, CHIRequestMsg) {
+  peek(reqTxRdyInPort, CHIRequestMsg) {
     enqueue(c2cTxReqOutPort, CHIRequestMsg, request_latency) {
       out_msg := in_msg;
       out_msg.requestor := machineID;
@@ -558,7 +693,7 @@ action(forwardDatToC2CTx, "fwdDatC2C", desc="Forward data to C2C TX DAT") {
 action(forwardSnpToC2CTx, "fwdSnpC2C", desc="Forward snoop to C2C TX SNP") {
   assert(is_valid(tbe));
   snpForwardCount := snpForwardCount + 1;
-  peek(snpInPort, CHIRequestMsg) {
+  peek(snpRdyInPort, CHIRequestMsg) {
     enqueue(c2cTxSnpOutPort, CHIRequestMsg, snoop_latency) {
       out_msg := in_msg;
       out_msg.isC2C := true;
@@ -608,7 +743,7 @@ action(forwardC2CReqToLocal, "fwdC2CReqL", desc="Forward C2C request to local No
   assert(is_valid(tbe));
   inboundReqCount := inboundReqCount + 1;
   req_onchip := req_onchip + 1;
-  peek(c2cRxReqInPort, CHIRequestMsg) {
+  peek(c2cRxReqRdyInPort, CHIRequestMsg) {
     enqueue(reqOutPort, CHIRequestMsg, request_latency) {
       out_msg := in_msg;
       out_msg.requestor := machineID;  // rewrite SrcID to this C2CG
@@ -799,7 +934,7 @@ action(forwardLocalSnpDatToC2C, "fwdLSnpDatC2C",
 action(forwardC2CSnpToLocal, "fwdC2CSnpL", desc="Forward C2C snoop to local") {
   assert(is_valid(tbe));
   snp_onchip := snp_onchip + 1;
-  peek(c2cRxSnpInPort, CHIRequestMsg) {
+  peek(c2cRxSnpRdyInPort, CHIRequestMsg) {
     NetDest localTargets := in_msg.rmtDest.AND(allUpstreamDest());
     if (shouldExpandReadMergedSnpTargets(in_msg.type,
                                          in_msg.retToSrc)) {
@@ -1078,8 +1213,8 @@ action(markNoDataExpected, "mnde",
 // Queue pop actions
 ////////////////////////////////////////////////////////////////////////////
 
-action(popReqRdyQueue, "prq", desc="Pop reqRdy queue") {
-  reqRdyInPort.dequeue(clockEdge());
+action(popReqRdyQueue, "prq", desc="Pop staged outbound request queue") {
+  reqTxRdyInPort.dequeue(clockEdge());
 }
 
 action(popReqInQueue, "preq", desc="Pop reqIn queue") {
@@ -1094,16 +1229,16 @@ action(popDatInQueue, "pdat", desc="Pop datIn queue") {
   datInPort.dequeue(clockEdge());
 }
 
-action(popSnpInQueue, "psnp", desc="Pop snpIn queue") {
-  snpInPort.dequeue(clockEdge());
+action(popSnpInQueue, "psnp", desc="Pop staged local SNP queue") {
+  snpRdyInPort.dequeue(clockEdge());
 }
 
-action(popC2CRxReqQueue, "pc2crq", desc="Pop C2C RX REQ queue") {
-  c2cRxReqInPort.dequeue(clockEdge());
+action(popC2CRxReqQueue, "pc2crq", desc="Pop staged C2C RX REQ queue") {
+  c2cRxReqRdyInPort.dequeue(clockEdge());
 }
 
-action(popC2CRxSnpQueue, "pc2csnp", desc="Pop C2C RX SNP queue") {
-  c2cRxSnpInPort.dequeue(clockEdge());
+action(popC2CRxSnpQueue, "pc2csnp", desc="Pop staged C2C RX SNP queue") {
+  c2cRxSnpRdyInPort.dequeue(clockEdge());
 }
 
 action(popC2CRxRspQueue, "pc2crsp", desc="Pop C2C RX RSP queue") {
@@ -1123,20 +1258,20 @@ action(popTriggerQueue, "ptq", desc="Pop trigger queue") {
 }
 
 action(stallRequestQueue, "str", desc="Stall request queue") {
-  peek(reqRdyInPort, CHIRequestMsg) {
-    stall_and_wait(reqRdyInPort, address);
+  peek(reqTxRdyInPort, CHIRequestMsg) {
+    stall_and_wait(reqTxRdyInPort, address);
   }
 }
 
 action(stallC2CRxReqQueue, "stc2crq", desc="Stall C2C RX request queue") {
-  peek(c2cRxReqInPort, CHIRequestMsg) {
-    stall_and_wait(c2cRxReqInPort, address);
+  peek(c2cRxReqRdyInPort, CHIRequestMsg) {
+    stall_and_wait(c2cRxReqRdyInPort, address);
   }
 }
 
 action(stallSnpQueue, "stsnp", desc="Stall snoop queue") {
-  peek(snpInPort, CHIRequestMsg) {
-    stall_and_wait(snpInPort, address);
+  peek(snpRdyInPort, CHIRequestMsg) {
+    stall_and_wait(snpRdyInPort, address);
   }
 }
 
@@ -1163,7 +1298,7 @@ action(allocateDvmTBE, "advmtbe", desc="Allocate DVM TBE") {
 action(recordDvmP1, "rdvmp1",
        desc="Buffer DVM P1 info in TBE from snpIn") {
   assert(is_valid(tbe));
-  peek(snpInPort, CHIRequestMsg) {
+  peek(snpRdyInPort, CHIRequestMsg) {
     tbe.reqType := in_msg.type;
     tbe.localSrcID := in_msg.requestor;  // the MN
     tbe.localTxnID := in_msg.addr;       // MN's txnId (= addr field)
@@ -1174,7 +1309,7 @@ action(recordDvmP1, "rdvmp1",
 action(recordInboundDvmP1, "ridvmp1",
        desc="Record inbound DVM P1 info from peer C2CG") {
   assert(is_valid(tbe));
-  peek(c2cRxSnpInPort, CHIRequestMsg) {
+  peek(c2cRxSnpRdyInPort, CHIRequestMsg) {
     tbe.reqType := in_msg.type;
     tbe.peerC2CG := in_msg.c2cSrcGateway;
     tbe.localSrcID := machineID;
@@ -1187,7 +1322,7 @@ action(forwardDvmSnpToC2C, "fdvmsnp",
        desc="Forward SnpDVM P1/P2 over the C2C SNP channel") {
   assert(is_valid(tbe));
   dvmReqsSent := dvmReqsSent + 1;
-  peek(snpInPort, CHIRequestMsg) {
+  peek(snpRdyInPort, CHIRequestMsg) {
     enqueue(c2cTxSnpOutPort, CHIRequestMsg, snoop_latency) {
       out_msg := in_msg;
       out_msg.isC2C := true;

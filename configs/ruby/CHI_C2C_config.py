@@ -52,6 +52,10 @@ class CHI_C2CController(CHI_CHI_C2C_Controller):
             triggerQueue=TriggerMessageBuffer(),
             retryTriggerQueue=TriggerMessageBuffer(),
             reqRdy=TriggerMessageBuffer(),
+            reqTxRdy=TriggerMessageBuffer(),
+            snpRdy=TriggerMessageBuffer(),
+            c2cRxReqRdy=TriggerMessageBuffer(),
+            c2cRxSnpRdy=TriggerMessageBuffer(),
         )
         self.transitions_per_cycle = 1024
         self.addr_ranges = addr_ranges

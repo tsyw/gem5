@@ -197,7 +197,10 @@ Event reqToEvent(CHIRequestType type) {
              (type == CHIRequestType:WriteUniquePtl) ||
              (type == CHIRequestType:WriteNoSnp) ||
              (type == CHIRequestType:WriteNoSnpPtl)) {
-    return Event:OutReq_WritePush;
+    if (writepush_enabled) {
+      return Event:OutReq_WritePush;
+    }
+    return Event:OutReq_Write;
   } else if ((type == CHIRequestType:WriteBackFull) ||
              (type == CHIRequestType:WriteCleanFull) ||
              (type == CHIRequestType:WriteEvictFull)) {
@@ -545,6 +548,42 @@ bool isDvmRequest(CHIRequestType type) {
     return true;
   }
   return false;
+}
+
+Event c2cReqToEvent(CHIRequestType type) {
+  if (isReadRequest(type)) {
+    return Event:InReq_Read;
+  } else if (isWriteRequest(type) || isDvmRequest(type)) {
+    return Event:InReq_Write;
+  } else if (isAtomicRequest(type)) {
+    return Event:InReq_Atomic;
+  } else if (type == CHIRequestType:CleanUnique) {
+    return Event:InReq_CleanUnique;
+  } else if (isCompOnlyDatalessRequest(type)) {
+    return Event:InReq_Evict;
+  } else {
+    error("Invalid CHIRequestType for C2CG c2cReqToEvent");
+  }
+}
+
+Event outSnpToEvent(CHIRequestType type) {
+  if (isDvmSnoop(type)) {
+    if (isDvmP1(type)) {
+      return Event:OutSnp_DvmP1;
+    }
+    return Event:OutSnp_DvmP2;
+  }
+  return Event:OutSnp_Forward;
+}
+
+Event inSnpToEvent(CHIRequestType type) {
+  if (isDvmSnoop(type)) {
+    if (isDvmP1(type)) {
+      return Event:InSnp_DvmP1;
+    }
+    return Event:InSnp_DvmP2;
+  }
+  return Event:InSnp_Deliver;
 }
 
 bool shouldExpandReadMergedSnpTargets(CHIRequestType type, bool retToSrc) {

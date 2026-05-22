@@ -85,6 +85,62 @@ transition({I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
   checkAllocateTBE_withCredit;
 }
 
+transition({I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
+            WR_ACTIVE_DBID, WR_WAIT_COMP,
+            COMPACK_ACTIVE, COMPACK_DL_ACTIVE,
+            COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE,
+            ATOMIC_WAIT_DBID, ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP,
+            RETRY_WAIT,
+            SNP_WAIT_RESP,
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
+            WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
+           CheckReqCredit) {
+  checkReqCreditAndStage;
+}
+
+transition({I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
+            WR_ACTIVE_DBID, WR_WAIT_COMP,
+            COMPACK_ACTIVE, COMPACK_DL_ACTIVE,
+            COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE,
+            ATOMIC_WAIT_DBID, ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP,
+            RETRY_WAIT,
+            SNP_WAIT_RESP,
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
+            WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
+           CheckOutSnp) {
+  checkOutSnpAndStage;
+}
+
+transition({I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
+            WR_ACTIVE_DBID, WR_WAIT_COMP,
+            COMPACK_ACTIVE, COMPACK_DL_ACTIVE,
+            COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE,
+            ATOMIC_WAIT_DBID, ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP,
+            RETRY_WAIT,
+            SNP_WAIT_RESP,
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
+            WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
+           CheckInSnp) {
+  checkInSnpAndStage;
+}
+
+transition({I, REQ_ACTIVE, ACTIVE_WAIT_SEP,
+            WR_ACTIVE_DBID, WR_WAIT_COMP,
+            COMPACK_ACTIVE, COMPACK_DL_ACTIVE,
+            COMP_ONLY_DL_ACTIVE, ATOMIC_ACTIVE,
+            ATOMIC_WAIT_DBID, ATOMIC_WAIT_DATA, ATOMIC_WAIT_COMP,
+            RETRY_WAIT,
+            SNP_WAIT_RESP,
+            DVM_WAIT_P2, DVM_WAIT_DBID, DVM_WAIT_COMP,
+            WR_PUSH_WAIT_DATA, WR_PUSH_SENT,
+            WR_PUSH_FWD_WAIT_DBID, WR_PUSH_FWD_WAIT_COMP},
+           CheckC2CRxReq) {
+  checkC2CRxReqAndStage;
+}
+
 ////////////////////////////////////////////////////////////////////////////
 // Outbound read flow: local RN -> C2CG -> C2C -> remote HN
 // Consume: REQ credit on send

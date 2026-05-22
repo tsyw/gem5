@@ -105,6 +105,10 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
   MessageBuffer * triggerQueue;
   MessageBuffer * retryTriggerQueue;
   MessageBuffer * reqRdy;
+  MessageBuffer * reqTxRdy;
+  MessageBuffer * snpRdy;
+  MessageBuffer * c2cRxReqRdy;
+  MessageBuffer * c2cRxSnpRdy;
 
 {
 
@@ -219,6 +223,10 @@ machine(MachineType:CHI_C2C, "CHI C2C Gateway Controller") :
     // TBE allocation events from NoC
     CheckAllocTBE,               desc="Check TBE avail for new request";
     CheckAllocTBE_WithCredit,    desc="Alloc TBE with pre-granted credit";
+    CheckReqCredit,              desc="Check outbound REQ credit before dispatch";
+    CheckOutSnp,                 desc="Check outbound snoop resources before dispatch";
+    CheckInSnp,                  desc="Check inbound snoop resources before dispatch";
+    CheckC2CRxReq,               desc="Check inbound C2C request resources before dispatch";
 
     // Outbound request events (local NoC -> C2C)
     OutReq_Read,                 desc="Read request for remote address";
